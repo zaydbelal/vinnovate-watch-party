@@ -1,0 +1,21 @@
+{
+  "name": "@watch-party/server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "NODE_ENV=production tsx src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@watch-party/shared": "*",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,77 @@
+import { useState } from 'react';
+import { LIMITS } from '@watch-party/shared';
+import { navigate } from '../App';
+import { createRoom, roomExists } from '../lib/api';
+import { getSavedName, saveName } from '../lib/identity';
+
+export function Home() {
+  const [name, setName] = useState(getSavedName);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const requireName = () => {
+    if (!name.trim()) {
+      setError('Pick a display name first');
+      return false;
+    }
+    saveName(name.trim());
+    return true;
+  };
+
+  const onCreate = async () => {
+    if (!requireName()) return;
+    setBusy(true);
+    try {
+      navigate(`/r/${await createRoom()}`);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  const onJoin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!requireName()) return;
+    // Accept a full invite link as well as a bare code.
+    const clean = code.trim().split('/').pop()!.toUpperCase();
+    if (!clean) return setError('Enter a room code');
+    setBusy(true);
+    if (await roomExists(clean).catch(() => false)) navigate(`/r/${clean}`);
+    else {
+      setError('No room with that code');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="home">
+      <div className="home-card">
+        <h1>
+          <span className="logo">🍿</span> Watch Party
+        </h1>
+        <p className="muted">Watch together in perfect sync. Chat, react, vote on what's next.</p>
+
+        <label className="field">
+          <span>Your name</span>
+          <input value={name} maxLength={LIMITS.maxNameLength} onChange={(e) => setName(e.target.value)} placeholder="e.g. Zayd" autoFocus />
+        </label>
+
+        <button className="btn primary big" onClick={onCreate} disabled={busy}>
+          Create a room
+        </button>
+
+        <div className="divider">or join one</div>
+
+        <form className="row" onSubmit={onJoin}>
+          <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Room code or invite link" />
+          <button className="btn" disabled={busy}>
+            Join
+          </button>
+        </form>
+
+        {error && <p className="error">{error}</p>}
+      </div>
+    </main>
+  );
+}

@@ -1,0 +1,8 @@
+{
+  "name": "@watch-party/shared",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}
