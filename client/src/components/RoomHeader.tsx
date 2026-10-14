@@ -3,9 +3,9 @@ import { navigate } from '../App';
 import { useClient, useMe, useRoom, useSession } from '../lib/context';
 import type { Theme } from '../lib/theme';
 import { SyncBadge } from './SyncBadge';
-import { Switch } from './ui';
+import { Switch, ThemePicker } from './ui';
 
-export function RoomHeader({ theme, onToggleTheme, onToggleFocus }: { theme: Theme; onToggleTheme: () => void; onToggleFocus: () => void }) {
+export function RoomHeader({ theme, onTheme, onToggleFocus }: { theme: Theme; onTheme: (t: Theme) => void; onToggleFocus: () => void }) {
   const session = useSession();
   const code = useRoom((r) => r.code);
   const status = useClient((s) => s.status);
@@ -48,7 +48,7 @@ export function RoomHeader({ theme, onToggleTheme, onToggleFocus }: { theme: The
       )}
       <Switch checked={awayManual} onChange={session.setStepAway} label="Away" title="Mark yourself AFK so the host knows to wait" />
       <Switch checked={false} onChange={onToggleFocus} label="Focus" title="Black out everything except the video and chat (F)" />
-      <Switch checked={theme === 'dark'} onChange={onToggleTheme} label="Dark" title="Dark mode" />
+      <ThemePicker theme={theme} onChange={onTheme} />
     </header>
   );
 }
