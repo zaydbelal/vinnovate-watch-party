@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import type { Reaction, RoomSnapshot } from '@watch-party/shared';
+import type { ScreenState } from './screenShare';
 import type { VoiceState } from './voice';
 
 export type ConnectionStatus = 'connecting' | 'joined' | 'reconnecting' | 'error';
@@ -26,6 +27,7 @@ export interface ClientState {
   away: { manual: boolean; auto: boolean };
   /** Follow the host's actual player instead of the room timeline. */
   lockToHost: boolean;
+  screen: ScreenState;
 }
 
 type Listener = () => void;
@@ -58,6 +60,7 @@ export function initialState(): ClientState {
     voice: { joined: false, muted: false, speaking: [] },
     away: { manual: false, auto: false },
     lockToHost: false,
+    screen: { stream: null, sharing: false },
   };
 }
 

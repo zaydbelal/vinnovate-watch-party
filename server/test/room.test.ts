@@ -333,3 +333,37 @@ describe('Clips, AFK and voice', () => {
     ).toThrow(RoomError);
   });
 });
+
+describe('Lobby song and screen share', () => {
+  it('host sets a looping lobby song; streaming links are rejected', () => {
+    const s = setup();
+    s.room.setLobbyTrack(s.host.id, { title: 'Chill', source: { kind: 'youtube', url: 'jfKfPfyJRdk' } });
+    expect(s.room.lobbyTrack).toMatchObject({ title: 'Chill', startedAt: s.clock.now() });
+    expect(() => s.room.setLobbyTrack(s.guest.id, null)).toThrow(RoomError);
+    expect(() =>
+      s.room.setLobbyTrack(s.host.id, { title: 'N', source: { kind: 'external', provider: 'netflix', url: 'https://www.netflix.com/watch/1' } }),
+    ).toThrow(RoomError);
+    s.room.setLobbyTrack(s.host.id, null);
+    expect(s.room.lobbyTrack).toBeNull();
+  });
+
+  it('one sharer at a time, pauses the video, and ends when the sharer leaves', () => {
+    const s = setup();
+    s.room.applyCommand(s.host.id, s.cmd('load', { media }));
+    s.room.startScreenShare(s.guest.id);
+    expect(s.room.screenShare?.memberId).toBe(s.guest.id);
+    expect(s.room.playback.playing).toBe(false);
+    expect(() => s.room.startScreenShare(s.host.id)).toThrow(/already sharing/);
+    s.room.disconnect(s.guest.id);
+    expect(s.room.screenShare).toBeNull();
+  });
+
+  it('host-only sharing and host can stop anyone', () => {
+    const s = setup();
+    s.room.startScreenShare(s.guest.id);
+    s.room.stopScreenShare(s.host.id);
+    expect(s.room.screenShare).toBeNull();
+    s.room.updateSettings(s.host.id, { screenShare: 'host' });
+    expect(() => s.room.startScreenShare(s.guest.id)).toThrow(RoomError);
+  });
+});

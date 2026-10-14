@@ -7,6 +7,7 @@ import {
   PAUSE_VOTE,
   PLAYBACK_RATES,
   REACTION_EMOJIS,
+  SCREEN_SHARE,
   STREAMING_PROVIDERS,
   TRAILERS,
   VOICE,
@@ -17,6 +18,7 @@ import {
   type ChatMessage,
   type Clip,
   type Lobby,
+  type LobbyTrack,
   type MediaItem,
   type MediaSource,
   type NewMedia,
@@ -32,6 +34,7 @@ import {
   type RoomPatch,
   type RoomSettings,
   type RoomSnapshot,
+  type ScreenShare,
   type TrailerVote,
 } from '@watch-party/shared';
 
@@ -64,7 +67,7 @@ export class Room {
   playlist: MediaItem[] = [];
   chat: ChatMessage[] = [];
   polls: Poll[] = [];
-  settings: RoomSettings = { controlMode: 'host', pausePolicy: 'anyone', waitForBuffering: true };
+  settings: RoomSettings = { controlMode: 'host', pausePolicy: 'anyone', waitForBuffering: true, screenShare: SCREEN_SHARE.defaultWho };
   history: string[] = [];
   pauseRequest: PauseRequest | null = null;
   clips: Clip[] = [];
@@ -72,6 +75,8 @@ export class Room {
   lobby: Lobby = { active: LOBBY.openOnCreate, startsAt: null };
   bufferHold: BufferHold | null = null;
   voice: string[] = [];
+  lobbyTrack: LobbyTrack | null = null;
+  screenShare: ScreenShare | null = null;
   /** Recent control-propagation latencies reported by clients (ms), for /api/metrics. */
   readonly latencySamples: number[] = [];
   /** Set when member stats changed; RoomManager flushes them on an interval. */
@@ -107,6 +112,8 @@ export class Room {
       lobby: this.lobby,
       bufferHold: this.bufferHold,
       voice: this.voice,
+      lobbyTrack: this.lobbyTrack,
+      screenShare: this.screenShare,
     };
   }
 
@@ -187,6 +194,7 @@ export class Room {
     const m = this.members.get(memberId);
     if (m) m.buffering = false;
     if (this.voice.includes(memberId)) this.leaveVoice(memberId);
+    if (this.screenShare?.memberId === memberId) this.endScreenShare();
     this.clearFromBufferHold(memberId);
     this.recheckPauseRequest();
   }
@@ -229,8 +237,9 @@ export class Room {
       throw new RoomError('Invalid pause policy');
     }
     if (patch.waitForBuffering !== undefined && typeof patch.waitForBuffering !== 'boolean') throw new RoomError('Invalid setting');
+    if (patch.screenShare !== undefined && patch.screenShare !== 'anyone' && patch.screenShare !== 'host') throw new RoomError('Invalid setting');
     const before = this.settings;
-    this.settings = { ...this.settings, ...pick(patch, ['controlMode', 'pausePolicy', 'waitForBuffering']) };
+    this.settings = { ...this.settings, ...pick(patch, ['controlMode', 'pausePolicy', 'waitForBuffering', 'screenShare']) };
     if (before.controlMode !== this.settings.controlMode) {
       this.system(this.settings.controlMode === 'everyone' ? 'Everyone can now control playback' : 'Only the host can control playback');
     }
@@ -240,6 +249,9 @@ export class Room {
     if (before.waitForBuffering !== this.settings.waitForBuffering) {
       this.system(this.settings.waitForBuffering ? 'The room will wait for anyone buffering' : 'The room will no longer wait for buffering');
       if (!this.settings.waitForBuffering) this.releaseBufferHold(true);
+    }
+    if (before.screenShare !== this.settings.screenShare) {
+      this.system(this.settings.screenShare === 'host' ? 'Only the host can share their screen' : 'Anyone can share their screen');
     }
     this.emit.patch({ settings: this.settings });
   }
@@ -727,6 +739,58 @@ export class Room {
     if (!this.voice.includes(memberId)) return;
     this.voice = this.voice.filter((id) => id !== memberId);
     this.emit.patch({ voice: this.voice });
+  }
+
+  // -------------------------------------------------------------------------
+  // Lobby song (host-picked, looped in sync)
+  // -------------------------------------------------------------------------
+
+  setLobbyTrack(byId: string, track: { title: string; source: MediaSource } | null): void {
+    if (this.hostId !== byId) throw new RoomError('Only the host can pick the lobby music');
+    if (!track) {
+      this.lobbyTrack = null;
+    } else {
+      const source = cleanSource(track.source);
+      if (source.kind === 'external') throw new RoomError('Use a YouTube link or an audio file for lobby music');
+      this.lobbyTrack = { title: String(track.title || 'Untitled').slice(0, 200), source, startedAt: this.now() };
+      this.system(`Lobby music: ${this.lobbyTrack.title}`);
+    }
+    this.emit.patch({ lobbyTrack: this.lobbyTrack });
+  }
+
+  // -------------------------------------------------------------------------
+  // Screen share (media flows peer-to-peer; the room tracks who is sharing)
+  // -------------------------------------------------------------------------
+
+  startScreenShare(memberId: string): void {
+    if (this.settings.screenShare === 'host' && this.hostId !== memberId) throw new RoomError('Only the host can share their screen');
+    if (this.screenShare && this.screenShare.memberId !== memberId) {
+      throw new RoomError(`${this.nameOf(this.screenShare.memberId)} is already sharing`);
+    }
+    if (this.screenShare) return;
+    this.screenShare = { memberId, startedAt: this.now() };
+    this.system(`${this.nameOf(memberId)} is sharing their screen`);
+    this.emit.patch({ screenShare: this.screenShare });
+    // The shared screen replaces the video, so stop the video underneath.
+    if (this.playback.playing) {
+      const now = this.now();
+      this.releaseBufferHold(false);
+      this.commit({ ...this.playback, playing: false, position: this.clampPosition(expectedPosition(this.playback, now)), updatedAt: now }, memberId, 'screen', now);
+    }
+  }
+
+  /** The sharer or the host can end a share. */
+  stopScreenShare(byId: string): void {
+    if (!this.screenShare) return;
+    if (this.screenShare.memberId !== byId && this.hostId !== byId) throw new RoomError('Only the host or the person sharing can stop this');
+    this.endScreenShare();
+  }
+
+  private endScreenShare(): void {
+    if (!this.screenShare) return;
+    this.system(`${this.nameOf(this.screenShare.memberId)} stopped sharing`);
+    this.screenShare = null;
+    this.emit.patch({ screenShare: null });
   }
 
   // -------------------------------------------------------------------------

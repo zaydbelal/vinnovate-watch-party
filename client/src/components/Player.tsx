@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CLIPS, PLAYBACK_RATES, REACTION_EMOJIS, formatTime } from '@watch-party/shared';
 import { useClient, useMe, useRoom, useSession } from '../lib/context';
+import { ScreenShareClient } from '../lib/screenShare';
 import { SyncEngine } from '../lib/syncEngine';
 import { Lobby } from './Lobby';
 import { FullscreenIcon, MutedIcon, PauseIcon, PlayIcon, VolumeIcon } from './ui';
@@ -18,6 +19,10 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
   const hostId = useRoom((r) => r.hostId);
   const hostDrift = useRoom((r) => r.members.find((m) => m.id === r.hostId)?.stats?.driftMs ?? 0);
   const lockToHost = useClient((s) => s.lockToHost);
+  const sharerId = useRoom((r) => r.screenShare?.memberId ?? null);
+  const shareWho = useRoom((r) => r.settings.screenShare);
+  const sharing = !!sharerId;
+  const sharerName = useRoom((r) => r.members.find((m) => m.id === r.screenShare?.memberId)?.name);
   const containerRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<SyncEngine | null>(null);
@@ -108,8 +113,9 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
   const playLabel = playback.playing ? (canPause ? 'Pause' : 'Ask to pause') : canResume ? 'Play' : 'Paused';
 
   return (
-    <section className={`stage ${lobbyActive ? 'in-lobby' : ''}`}>
-      {lobbyActive && <Lobby />}
+    <section className={`stage ${lobbyActive && !sharing ? 'in-lobby' : ''} ${sharing ? 'is-sharing' : ''}`}>
+      {sharing && <ScreenView sharerId={sharerId} volume={volume} muted={muted} />}
+      {lobbyActive && !sharing && <Lobby />}
       <div className="player-frame" ref={frameRef} aria-hidden={lobbyActive || undefined}>
         <div className="player-container" ref={containerRef} />
         {/* Shield blocks clicks on embeds so nobody bypasses room controls. */}
@@ -184,6 +190,11 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
           onChange={(e) => (setVolume(Number(e.target.value)), setMuted(false))}
         />
         <ClipMenu disabled={!playback.media} onClip={clip} />
+        {ScreenShareClient.supported() && !sharing && (shareWho === 'anyone' || isHost) && (
+          <button className="btn small ghost hide-sm" onClick={() => void session.startScreenShare()} title="Share a screen, window or tab with the room">
+            Share screen
+          </button>
+        )}
         {!isHost && hostId && (
           <button
             className={`btn small ${following ? 'primary' : 'ghost'}`}
@@ -205,7 +216,7 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
       {!focus && (
         <div className="now-playing">
           <div className="now-playing-text">
-            <h2 className="now-title">{playback.media?.title ?? 'No video'}</h2>
+            <h2 className="now-title">{sharing ? `${sharerName ?? 'Someone'}'s screen` : (playback.media?.title ?? 'No video')}</h2>
             <p className="muted small">
               {[
                 !canControl && (settings.pausePolicy === 'anyone' ? 'Anyone can pause · host controls the rest' : 'Host controls playback · ask to pause'),
@@ -226,6 +237,59 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The shared screen, shown in place of the video. Your volume and mute
+ * controls apply to it too. The sharer sees their own capture, muted.
+ */
+function ScreenView({ sharerId, volume, muted }: { sharerId: string; volume: number; muted: boolean }) {
+  const session = useSession();
+  const stream = useClient((s) => s.screen.stream);
+  const { memberId, isHost } = useMe();
+  const name = useRoom((r) => r.members.find((m) => m.id === sharerId)?.name ?? 'Someone');
+  const ref = useRef<HTMLVideoElement>(null);
+  const [needsClick, setNeedsClick] = useState(false);
+  const mine = sharerId === memberId;
+
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    v.srcObject = stream;
+    if (stream) v.play().then(() => setNeedsClick(false), () => setNeedsClick(true));
+  }, [stream]);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    v.volume = volume;
+    v.muted = mine || muted;
+  }, [volume, muted, mine]);
+
+  const fullscreen = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void ref.current?.parentElement?.requestFullscreen();
+  };
+
+  return (
+    <div className="player-frame screen-frame">
+      <video ref={ref} className="player-media" playsInline autoPlay onDoubleClick={fullscreen} />
+      {!stream && <div className="player-loading">Connecting to {name}'s screen</div>}
+      {needsClick && (
+        <button className="player-unblock" onClick={() => void ref.current?.play().then(() => setNeedsClick(false))}>
+          Click to watch {name}'s screen
+          <small>Your browser blocked autoplay</small>
+        </button>
+      )}
+      <div className="screen-bar">
+        <span>{mine ? 'You are sharing your screen' : `${name} is sharing their screen`}</span>
+        {(mine || isHost) && (
+          <button className="btn small primary" onClick={() => void session.stopScreenShare()}>
+            {mine ? 'Stop sharing' : 'End share'}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

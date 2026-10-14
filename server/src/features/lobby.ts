@@ -5,6 +5,7 @@ import { onMember } from './helpers';
 export const lobbyFeature: Feature = {
   name: 'lobby',
   register(socket, ctx) {
+    onMember(socket, ctx, 'lobby:track', ({ room, member }, { track }) => room.setLobbyTrack(member.id, track));
     onMember(socket, ctx, 'lobby:set', ({ room, member }, { active, countdownSec }) => room.setLobby(member.id, !!active, countdownSec));
     onMember(socket, ctx, 'trailers:start', ({ room, member }, { options }) => room.startTrailerVote(member.id, options), { rateLimited: true });
     onMember(socket, ctx, 'trailers:vote', ({ room, member }, { optionId }) => room.voteTrailer(member.id, optionId));

@@ -94,6 +94,26 @@ export const LOFI = {
   ],
 } as const;
 
+/** Host-picked lobby song (pasted link), looped in sync. */
+export const LOBBY_TRACK = {
+  volume: 0.6,
+  /** Re-align a listener whose song drifts further than this from the room. */
+  driftToleranceMs: 300,
+  checkIntervalMs: 2000,
+} as const;
+
+export const SCREEN_SHARE = {
+  /** Capture constraints: higher means sharper but heavier on the sharer's upload. */
+  maxHeight: 720,
+  frameRate: 30,
+  /** Bitrate cap per viewer (bits/s). Each viewer gets their own stream from the sharer. */
+  maxBitrate: 2_500_000,
+  /** Ask for tab/system audio (Chrome/Edge; whole-screen audio is Windows-only). */
+  audio: true,
+  /** Default for new rooms: 'anyone' or 'host'. */
+  defaultWho: 'anyone' as 'anyone' | 'host',
+} as const;
+
 export const TRAILERS = {
   minOptions: 2,
   maxOptions: 3,

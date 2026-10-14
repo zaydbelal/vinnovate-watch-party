@@ -11,6 +11,7 @@ import { pollsFeature } from './polls';
 import { presenceFeature } from './presence';
 import { reactionsFeature } from './reactions';
 import { roomFeature } from './room';
+import { screenFeature } from './screen';
 import { voiceFeature } from './voice';
 
 /**
@@ -31,4 +32,5 @@ export const features: Feature[] = [
   clipsFeature,
   lobbyFeature,
   voiceFeature,
+  screenFeature,
 ];

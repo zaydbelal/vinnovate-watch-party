@@ -116,6 +116,22 @@ export interface RoomSettings {
   pausePolicy: PausePolicy;
   /** Pause the room while someone's player is buffering, resume when they catch up. */
   waitForBuffering: boolean;
+  /** Who may share their screen. */
+  screenShare: 'anyone' | 'host';
+}
+
+/** A song the host picked for the lobby, looped in sync for everyone. */
+export interface LobbyTrack {
+  title: string;
+  /** `youtube` (played audio-only) or `html5` (a direct audio/video file). */
+  source: MediaSource;
+  /** Server-clock ms the loop started; position = elapsed % duration. */
+  startedAt: number;
+}
+
+export interface ScreenShare {
+  memberId: string;
+  startedAt: number;
 }
 
 export interface PauseRequest {
@@ -190,6 +206,9 @@ export interface RoomSnapshot {
   bufferHold: BufferHold | null;
   /** Member ids currently in the voice channel. */
   voice: string[];
+  /** Host-picked lobby song; null plays the generated lo-fi. */
+  lobbyTrack: LobbyTrack | null;
+  screenShare: ScreenShare | null;
 }
 
 /** Keys of `RoomSnapshot` that can be pushed as partial updates. */
@@ -202,7 +221,7 @@ export type RoomPatch = Partial<Omit<RoomSnapshot, 'code'>>;
 export type PlaybackAction = 'play' | 'pause' | 'seek' | 'load' | 'rate';
 
 /** Why the server changed playback on its own. */
-export type AutoAction = 'auto' | 'buffer' | 'vote' | 'lobby';
+export type AutoAction = 'auto' | 'buffer' | 'vote' | 'lobby' | 'screen';
 
 export interface PlaybackCommand {
   action: PlaybackAction;
@@ -248,6 +267,9 @@ export type NewMedia = Omit<MediaItem, 'id' | 'addedBy' | 'votes'>;
 export type VoiceSignal =
   | { type: 'offer' | 'answer'; sdp: string }
   | { type: 'ice'; candidate: { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null } };
+
+/** Screen-share signalling: viewers send `want` to ask the sharer for a stream. */
+export type ScreenSignal = VoiceSignal | { type: 'want' };
 
 export interface Reaction {
   id: string;
@@ -306,6 +328,13 @@ export interface ClientToServerEvents {
   'voice:join': (payload: Record<string, never>, ack?: Ack) => void;
   'voice:leave': (payload: Record<string, never>) => void;
   'voice:signal': (payload: { to: string; signal: VoiceSignal }) => void;
+
+  /** Host sets the lobby song (a YouTube or audio link), or null for the generated lo-fi. */
+  'lobby:track': (payload: { track: { title: string; source: MediaSource } | null }, ack?: Ack) => void;
+
+  'screen:start': (payload: Record<string, never>, ack?: Ack) => void;
+  'screen:stop': (payload: Record<string, never>, ack?: Ack) => void;
+  'screen:signal': (payload: { to: string; signal: ScreenSignal }) => void;
 }
 
 export interface ServerToClientEvents {
@@ -316,4 +345,5 @@ export interface ServerToClientEvents {
   'reaction': (reaction: Reaction) => void;
   'notice': (payload: { level: 'info' | 'error'; text: string }) => void;
   'voice:signal': (payload: { from: string; signal: VoiceSignal }) => void;
+  'screen:signal': (payload: { from: string; signal: ScreenSignal }) => void;
 }

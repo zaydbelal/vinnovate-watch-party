@@ -25,6 +25,8 @@ Almost every knob lives in one of three places. Change the value, save, done.
 | Clip lengths | `shared/src/config.ts` | `CLIPS.lengths`, `minSec`, `maxSec`, `maxPerRoom` |
 | Lobby countdown presets, open-on-create | `shared/src/config.ts` | `LOBBY.countdownPresets`, `openOnCreate` |
 | Lo-fi music tempo, volume, chords, crackle, hi-hats | `shared/src/config.ts` | `LOFI.bpm`, `volume`, `progression`, `crackle` (0 = off), `hats` (sound design in `client/src/lib/lofi.ts`) |
+| Lobby song volume and sync tolerance | `shared/src/config.ts` | `LOBBY_TRACK.*` |
+| Screen share quality, audio, who may share by default | `shared/src/config.ts` | `SCREEN_SHARE.maxHeight`, `frameRate`, `maxBitrate`, `audio`, `defaultWho` |
 | Trailer vote size, preview length | `shared/src/config.ts` | `TRAILERS.*` |
 | Voice: STUN/TURN servers, max people, speaking sensitivity | `shared/src/config.ts` | `VOICE.iceServers`, `maxParticipants`, `speakingThreshold` |
 | Default room rules (who controls, pause policy, buffering) | `server/src/rooms/Room.ts` | `settings = { controlMode, pausePolicy, waitForBuffering }` |

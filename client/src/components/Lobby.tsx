@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LOBBY, formatTime } from '@watch-party/shared';
 import { useMe, useRoom, useSession } from '../lib/context';
+import { LobbyTrackPlayer } from '../lib/lobbyTrack';
 import { LofiMusic } from '../lib/lofi';
+import { mediaFromInput } from '../lib/media';
 import { TrailerVote } from './TrailerVote';
 import { Avatar, useServerNow } from './ui';
 
@@ -26,11 +28,14 @@ export function Lobby() {
   const media = useRoom((r) => r.playback.media);
   const position = useRoom((r) => r.playback.position);
   const members = useRoom((r) => r.members);
+  const track = useRoom((r) => r.lobbyTrack);
   const { isHost } = useMe();
   const now = useServerNow();
   const [musicOn, setMusicOn] = useState(musicPref);
   const [previewing, setPreviewing] = useState(false);
   const music = useRef<LofiMusic | null>(null);
+  const trackMount = useRef<HTMLDivElement>(null);
+  const trackPlayer = useRef<LobbyTrackPlayer | null>(null);
 
   const remaining = lobby.startsAt != null ? Math.max(0, (lobby.startsAt - now) / 1000) : null;
   const here = members.filter((m) => m.connected);
@@ -39,19 +44,26 @@ export function Lobby() {
 
   // Music follows the preference, pauses during trailer previews, and needs one
   // user gesture before the browser lets it start.
+  // A host-picked song replaces the generated lo-fi.
   useEffect(() => {
     const m = (music.current ??= new LofiMusic());
+    const tp = (trackPlayer.current ??= new LobbyTrackPlayer(trackMount.current!, () => session.clock.serverNow()));
     const want = musicOn && !previewing;
-    if (!want) {
-      m.stop();
-      return;
-    }
-    const tryStart = () => void m.start().catch(() => {});
+    if (!want || track) m.stop();
+    if (!want || !track) tp.stop();
+    if (!want) return;
+    const tryStart = track ? () => void tp.play(track) : () => void m.start().catch(() => {});
     tryStart();
     window.addEventListener('pointerdown', tryStart, { once: true });
     return () => window.removeEventListener('pointerdown', tryStart);
-  }, [musicOn, previewing]);
-  useEffect(() => () => music.current?.dispose(), []);
+  }, [musicOn, previewing, track, session]);
+  useEffect(
+    () => () => {
+      music.current?.dispose();
+      trackPlayer.current?.stop();
+    },
+    [],
+  );
 
   const toggleMusic = () => {
     const next = !musicOn;
@@ -103,6 +115,7 @@ export function Lobby() {
         <button className="btn ghost" onClick={toggleMusic} aria-pressed={musicOn}>
           {musicOn ? 'Music on' : 'Music off'}
         </button>
+        <span className="muted small lobby-track">{track ? `Playing ${track.title}` : 'Lo-fi radio'}</span>
         {isHost && (
           <>
             <span className="lobby-sep" />
@@ -123,7 +136,44 @@ export function Lobby() {
         )}
       </div>
 
+      {isHost && <LobbyTrackPicker hasTrack={!!track} />}
+
       <TrailerVote onPreviewing={onPreviewing} />
+      {/* Off-screen mount for the lobby song's player (YouTube needs a real-sized iframe). */}
+      <div ref={trackMount} className="lobby-track-mount" aria-hidden />
     </section>
+  );
+}
+
+/** Host: paste a YouTube or audio link to loop for everyone, or go back to the lo-fi. */
+function LobbyTrackPicker({ hasTrack }: { hasTrack: boolean }) {
+  const session = useSession();
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    const media = await mediaFromInput(url);
+    if (!media || media.source.kind === 'external') {
+      setBusy(false);
+      session.notify('error', 'Paste a YouTube link or a direct audio file (.mp3, .m4a, .ogg)');
+      return;
+    }
+    const res = await session.setLobbyTrack({ title: media.title, source: media.source });
+    setBusy(false);
+    if (res.ok) setUrl('');
+  };
+  return (
+    <form className="lobby-music-form row" onSubmit={submit}>
+      <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a song: YouTube link or audio file" aria-label="Lobby music link" />
+      <button className="btn" disabled={busy || !url.trim()}>
+        Play for everyone
+      </button>
+      {hasTrack && (
+        <button type="button" className="btn ghost" onClick={() => void session.setLobbyTrack(null)}>
+          Back to lo-fi
+        </button>
+      )}
+    </form>
   );
 }

@@ -173,6 +173,15 @@ video.player-media { object-fit: contain; }
 }
 .player-unblock small { font-weight: 400; font-size: 12px; }
 
+/* Screen share replaces the video; the room's player stays mounted but hidden. */
+.stage.is-sharing > .player-frame:not(.screen-frame) { position: absolute; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+.screen-frame video { object-fit: contain; }
+.screen-bar {
+  position: absolute; top: var(--space-3); left: var(--space-3); z-index: 4;
+  display: flex; align-items: center; gap: var(--space-3);
+  background: rgba(10, 10, 10, 0.78); color: #f3f1ed; padding: 6px 6px 6px 12px; border-radius: var(--radius); font-size: var(--fs-sm);
+}
+
 /* While the lobby shows, the player stays mounted (and preloading) but out of sight. */
 .stage.in-lobby .player-frame { position: absolute; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
 .stage.in-lobby .controls, .stage.in-lobby .now-playing { display: none; }
@@ -237,6 +246,8 @@ video.player-media { object-fit: contain; }
 .lobby-people { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .lobby-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .lobby-sep { width: var(--space-3); }
+.lobby-music-form { max-width: 620px; }
+.lobby-track-mount { position: fixed; left: -10000px; top: 0; width: 240px; height: 240px; pointer-events: none; }
 
 .trailers, .trailer-setup { display: flex; flex-direction: column; gap: var(--space-3); }
 .trailers-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }

@@ -6,12 +6,14 @@ import {
   type NewMedia,
   type PlaybackAction,
   type PlaybackBroadcast,
+  type MediaSource,
   type RoomSettings,
 } from '@watch-party/shared';
 import { ClockSync } from './clock';
 import { getSessionId, saveSessionId } from './identity';
 import { createSocket, type AppSocket } from './socket';
 import { Store, initialState, type ClientState } from './store';
+import { ScreenShareClient } from './screenShare';
 import { VoiceChat } from './voice';
 
 type AckResult = { ok: boolean; error?: string };
@@ -37,6 +39,11 @@ export class RoomSession {
     () => this.store.get().memberId,
     (voice) => this.store.set({ voice }),
   );
+  readonly screen = new ScreenShareClient(
+    this.socket,
+    (screen) => this.store.set({ screen }),
+    () => void this.stopScreenShare(),
+  );
 
   constructor(
     readonly code: string,
@@ -53,7 +60,9 @@ export class RoomSession {
     s.on('room:patch', (patch) => {
       this.store.set((st) => (st.room ? { room: { ...st.room, ...patch } } : {}));
       if (patch.voice) this.voice.reconcile(patch.voice);
+      if ('screenShare' in patch) this.screen.sync(patch.screenShare?.memberId ?? null, this.store.get().memberId);
     });
+    s.on('screen:signal', ({ from, signal }) => void this.screen.handleSignal(from, signal).catch(() => {}));
     s.on('voice:signal', ({ from, signal }) => void this.voice.handleSignal(from, signal).catch(() => {}));
     s.on('playback:state', (b) => this.onPlayback(b));
     s.on('chat:message', (msg) =>
@@ -78,6 +87,7 @@ export class RoomSession {
     document.removeEventListener('visibilitychange', this.onVisibility);
     if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
     this.voice.leave();
+    this.screen.destroy();
     this.clock.stop();
     if (this.socket.connected) this.socket.emit('room:leave');
     this.socket.removeAllListeners();
@@ -103,6 +113,9 @@ export class RoomSession {
     if (!current || snapshot.playback.version !== current.version) {
       this.playbackListeners.forEach((l) => l({ state: snapshot.playback, origin: { memberId: null, action: 'auto', issuedAt: 0 } }));
     }
+    // Pick up (or re-request) an ongoing screen share; a reconnect drops the old link.
+    this.screen.sync(null, res.memberId);
+    this.screen.sync(snapshot.screenShare?.memberId ?? null, res.memberId);
     // A reconnect drops server-side presence; restore what this client still has.
     const { away, voice } = this.store.get();
     if (away.manual || away.auto) this.socket.emit('presence:afk', { afk: true });
@@ -272,4 +285,21 @@ export class RoomSession {
   setVoiceMuted = (muted: boolean) => this.voice.setMuted(muted);
 
   setLockToHost = (lockToHost: boolean) => this.store.set({ lockToHost });
+
+  setLobbyTrack = (track: { title: string; source: MediaSource } | null) => this.call('lobby:track', { track });
+
+  /** Pick a screen/window/tab, then announce the share; viewers request the stream. */
+  startScreenShare = async () => {
+    try {
+      await this.screen.capture();
+    } catch {
+      return; // cancelled the picker
+    }
+    const res = await this.call('screen:start', {});
+    if (!res.ok) this.screen.stopSharing();
+  };
+  stopScreenShare = async () => {
+    this.screen.stopSharing();
+    await this.call('screen:stop', {});
+  };
 }

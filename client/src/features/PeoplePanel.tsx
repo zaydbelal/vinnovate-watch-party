@@ -30,6 +30,11 @@ export function PeoplePanel() {
             onChange={(v) => void session.updateSettings({ waitForBuffering: v })}
             label="Wait for anyone buffering"
           />
+          <Switch
+            checked={settings.screenShare === 'host'}
+            onChange={(v) => void session.updateSettings({ screenShare: v ? 'host' : 'anyone' })}
+            label="Only the host can share their screen"
+          />
         </section>
       )}
       <h3 className="section-label">In the room</h3>
