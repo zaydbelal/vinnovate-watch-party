@@ -51,7 +51,7 @@ npm start            # http://localhost:3001
 - **Voice chat**: peer-to-peer WebRTC audio (mesh, up to 12 people) with mute and speaking indicators. Text chat with system messages.
 - **AFK**: "Away" switch, or automatic after 30 s with the tab hidden. The avatar dims with an AFK tag, and the host sees "2 away" in the header. AFK viewers aren't counted in pause votes and never trigger buffer holds.
 - **Focus mode** (`F`): blacks out everything except the video and the chat sidebar.
-- Emoji reactions that float over the video, a voted playlist, polls, host transfer, and Discover with categories, filters, fuzzy search and recommendations.
+- Emoji reactions that float over the video, a voted playlist, polls, host transfer, and Discover with categories, genre filter, sorting, fuzzy search and recommendations (the catalog is free open movies from the Blender Studio; add your own in `server/src/catalog/movies.json`).
 
 **Look and feel**
 - Light and dark themes (remembers your choice, defaults to the OS setting), responsive down to phone width, Satoshi type, separation by space and tone rather than borders, no glow or gradients. `npm run design:check` runs [Impeccable](https://impeccable.style)'s anti-pattern detector, and CI runs it too. Impeccable is also installed as a Claude Code skill with hooks that check UI edits in real time.
