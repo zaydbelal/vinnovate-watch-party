@@ -121,12 +121,14 @@ export function SubtitleOverlay({ state, getTime }: { state: SubtitleState; getT
 }
 
 /** CC button: load a file, on/off, size, timing nudge, remove. Only you see the result. */
-export function SubtitleMenu({ state, update, load, onError, disabled }: {
+export function SubtitleMenu({ state, update, load, onError, disabled, provider }: {
   state: SubtitleState;
   update: (patch: Patch) => void;
   load: (file: File) => Promise<string | null>;
   onError: (message: string) => void;
   disabled: boolean;
+  /** The video provider's own captions (e.g. YouTube), when it has any. */
+  provider?: { name: string; on: boolean; toggle: () => void };
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -146,7 +148,7 @@ export function SubtitleMenu({ state, update, load, onError, disabled }: {
     if (err) onError(err);
   };
   const step = SUBTITLES.offsetStepSec;
-  const active = !!state.track && state.on;
+  const active = (!!state.track && state.on) || !!provider?.on;
 
   return (
     <div className="clip-menu" ref={ref}>
@@ -162,6 +164,15 @@ export function SubtitleMenu({ state, update, load, onError, disabled }: {
       <input ref={fileRef} type="file" accept=".srt,.vtt,text/vtt,application/x-subrip" hidden onChange={(e) => void pick(e)} />
       {open && (
         <div className="popover subs-menu" role="dialog" aria-label="Subtitles">
+          {provider && (
+            <div className="row subs-provider">
+              <span className="small">{provider.name} captions</span>
+              <span className="spacer" />
+              <button className={`btn small ${provider.on ? 'primary' : ''}`} onClick={provider.toggle} aria-pressed={provider.on}>
+                {provider.on ? 'On' : 'Off'}
+              </button>
+            </div>
+          )}
           {!state.track ? (
             <>
               <span className="muted small">Subtitles just for you</span>

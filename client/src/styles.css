@@ -193,6 +193,7 @@ video.player-media { object-fit: contain; }
 .subtitles span { background: rgba(0, 0, 0, 0.72); padding: 0.05em 0.35em; white-space: pre-wrap; }
 .subs-menu { flex-direction: column; align-items: stretch; gap: var(--space-2); white-space: normal; min-width: 220px; }
 .subs-name { max-width: 240px; font-weight: 700; }
+.subs-provider { padding-bottom: var(--space-2); }
 .subs-offset { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; }
 
 /* While the lobby shows, the player stays mounted (and preloading) but out of sight. */

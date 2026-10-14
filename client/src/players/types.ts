@@ -19,6 +19,8 @@ export interface PlayerAdapter {
   isPaused(): boolean;
   /** True while playback is stalled waiting for data (drives auto-buffer catching). */
   isBuffering(): boolean;
+  /** Turn the provider's own captions on or off (YouTube). Absent if it has none. */
+  setCaptions?(on: boolean): void;
   /** Duration of one frame in ms if known (used to pick frame-accurate tolerances). */
   frameDurationMs?(): number | null;
   setRate(rate: number): void;
