@@ -60,7 +60,7 @@ One web service, one HTTPS URL. Easiest: on [Render](https://render.com) choose 
 - Emoji reactions that float over the video, a voted playlist, polls, host transfer, and Discover with categories, genre filter, sorting, fuzzy search and recommendations (the catalog is free open movies from the Blender Studio; add your own in `server/src/catalog/movies.json`).
 
 **Look and feel**
-- Light, dark and **Brutal** themes (remembers your choice, defaults to the OS setting). Light and dark use Satoshi type and separate things with space and tone rather than borders, with no glow or gradients; Brutal is a stark backup with monospace type, 3px black rules, square corners, black/white with one yellow and no easing. All three work down to phone width. `npm run design:check` runs [Impeccable](https://impeccable.style)'s anti-pattern detector, and CI runs it too. Impeccable is also installed as a Claude Code skill with hooks that check UI edits in real time.
+- Light, dark and **Brutal** themes (remembers your choice, defaults to the OS setting). Light and dark use Satoshi type and separate things with space and tone rather than borders, with no glow or gradients; Brutal is a stark backup with monospace type, 3px black rules, square corners, black/white with one yellow and no easing. All three work down to phone width. `npm run design:check` runs [Impeccable](https://impeccable.style)'s anti-pattern detector, and CI runs it too.
 
 **Reliability**: reconnects keep your seat, identity, voice and AFK state for 30 s. Late joiners land at the live position, autoplay blocks get a "click to join playback" button, and simultaneous commands are serialised and versioned so everyone converges on the same state.
 

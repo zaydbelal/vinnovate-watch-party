@@ -7,8 +7,6 @@ npm run typecheck && npm test
 npm run design:check   # Impeccable: flags common AI-design anti-patterns in the UI
 ```
 
-Impeccable is also installed as a Claude Code skill (`.claude/skills/impeccable`, from `npx impeccable install`). Its hooks in `.claude/settings.json` check UI files after every edit and do a deeper pass when Claude finishes a turn, so anti-patterns are caught as they're written. In Claude Code, `/impeccable` lists its design commands. The engine binary is gitignored; the launcher downloads the right one for your OS on first use.
-
 ## Customise at a glance
 
 Almost every knob lives in one of three places. Change the value, save, done.
