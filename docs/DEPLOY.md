@@ -14,7 +14,17 @@ Every push to that branch redeploys automatically.
 
 **Free vs paid.** The blueprint uses Render's free plan. Free services go to sleep after a period of no traffic, and the first visitor waits about a minute while it wakes. For a planned watch party, switch the service to a paid instance in the Render dashboard, or open the site a few minutes early. Check Render's pricing page for current plans.
 
-## Option B: any container host
+## Option B: Railway (always on)
+
+`railway.json` tells Railway to build the `Dockerfile`, health-check `/api/health` and run exactly one instance.
+
+1. Sign in at [railway.com](https://railway.com) with GitHub.
+2. **New Project → Deploy from GitHub repo**, pick this repository.
+3. In the service's **Settings → Source**, set the branch you want to deploy.
+4. **Settings → Networking → Generate Domain** to get a public `https://…up.railway.app` URL. Railway sets `PORT` itself.
+5. Add the `TURN_*` variables under **Variables** when you have them.
+
+## Option C: any other container host
 
 `Dockerfile` builds a self-contained image (Node 22, production client build, `npm start`). It listens on `PORT` (default 3001).
 
