@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CLIPS, PLAYBACK_RATES, REACTION_EMOJIS, formatTime } from '@watch-party/shared';
 import { useClient, useMe, useRoom, useSession } from '../lib/context';
 import { ScreenShareClient } from '../lib/screenShare';
 import { SyncEngine } from '../lib/syncEngine';
 import type { FullscreenMode } from '../pages/RoomPage';
 import { Lobby } from './Lobby';
+import { SubtitleMenu, SubtitleOverlay, useSubtitles } from './Subtitles';
 import { FullscreenIcon, MutedIcon, PauseIcon, PlayIcon, VolumeIcon } from './ui';
 
 /**
@@ -48,6 +49,10 @@ export function Player({
   const [scrub, setScrub] = useState<number | null>(null);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
+  // Personal subtitles, remembered per video (by its source) for this tab.
+  const mediaKey = playback.media ? `${playback.media.source.kind}:${playback.media.source.url}` : null;
+  const [subs, updateSubs, loadSubs] = useSubtitles(mediaKey);
+  const getTime = useCallback(() => engineRef.current?.currentTime() ?? 0, []);
 
   // One engine per mounted player; it receives every playback broadcast.
   useEffect(() => {
@@ -147,6 +152,7 @@ export function Player({
             <small>Your browser blocked autoplay</small>
           </button>
         )}
+        {subs.track && <SubtitleOverlay state={subs} getTime={getTime} />}
         <RoomBanners />
         <FloatingReactions />
       </div>
@@ -203,6 +209,7 @@ export function Player({
           value={muted ? 0 : volume}
           onChange={(e) => (setVolume(Number(e.target.value)), setMuted(false))}
         />
+        <SubtitleMenu state={subs} update={updateSubs} load={loadSubs} onError={(m) => session.notify('error', m)} disabled={!playback.media} />
         <ClipMenu disabled={!playback.media} onClip={clip} />
         {ScreenShareClient.supported() && !sharing && (shareWho === 'anyone' || isHost) && (
           <button className="btn small ghost hide-sm" onClick={() => void session.startScreenShare()} title="Share a screen, window or tab with the room">

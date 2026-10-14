@@ -116,6 +116,17 @@ export const SCREEN_SHARE = {
   defaultWho: 'anyone' as 'anyone' | 'host',
 } as const;
 
+/** Personal subtitles (each viewer loads their own .srt/.vtt; never shared). */
+export const SUBTITLES = {
+  /** Text sizes offered, as a fraction of the video's height. */
+  sizes: { S: 0.035, M: 0.05, L: 0.07 } as Record<'S' | 'M' | 'L', number>,
+  defaultSize: 'M' as 'S' | 'M' | 'L',
+  /** Each timing nudge moves subtitles by this many seconds. */
+  offsetStepSec: 0.5,
+  /** Larger files are refused (a feature film's .srt is ~100 KB). */
+  maxFileBytes: 2_000_000,
+} as const;
+
 export const TRAILERS = {
   minOptions: 2,
   maxOptions: 3,

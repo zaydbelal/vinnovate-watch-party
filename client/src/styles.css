@@ -183,6 +183,18 @@ video.player-media { object-fit: contain; }
   background: rgba(10, 10, 10, 0.78); color: #f3f1ed; padding: 6px 6px 6px 12px; border-radius: var(--radius); font-size: var(--fs-sm);
 }
 
+/* Personal subtitles: plain text on a dark band, above the banners' baseline. */
+.subtitles {
+  position: absolute; left: 50%; bottom: 8%; transform: translateX(-50%); z-index: 3;
+  width: max-content; max-width: 90%; pointer-events: none;
+  display: flex; flex-direction: column; align-items: center; gap: 0.1em;
+  font-family: var(--font); font-weight: 500; line-height: 1.25; text-align: center; color: #fff;
+}
+.subtitles span { background: rgba(0, 0, 0, 0.72); padding: 0.05em 0.35em; white-space: pre-wrap; }
+.subs-menu { flex-direction: column; align-items: stretch; gap: var(--space-2); white-space: normal; min-width: 220px; }
+.subs-name { max-width: 240px; font-weight: 700; }
+.subs-offset { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; }
+
 /* While the lobby shows, the player stays mounted (and preloading) but out of sight. */
 .stage.in-lobby .player-frame { position: absolute; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
 .stage.in-lobby .controls, .stage.in-lobby .now-playing { display: none; }
@@ -214,7 +226,7 @@ video.player-media { object-fit: contain; }
 .time { font-variant-numeric: tabular-nums; font-size: var(--fs-sm); color: var(--muted); min-width: 44px; text-align: center; }
 .clip-menu { position: relative; }
 .popover { position: absolute; bottom: calc(100% + 6px); right: 0; z-index: 5; display: flex; align-items: center; gap: var(--space-1); padding: var(--space-2); background: var(--surface-2); border-radius: var(--radius); white-space: nowrap; animation: pop 0.14s var(--ease); }
-.popover .btn { background: var(--bg); }
+.popover .btn:not(.primary) { background: var(--bg); }
 .popover .muted { margin-right: var(--space-1); }
 @keyframes pop { from { opacity: 0; transform: translateY(4px); } }
 

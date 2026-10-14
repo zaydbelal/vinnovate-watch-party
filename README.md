@@ -55,6 +55,7 @@ One web service, one HTTPS URL. Easiest: on [Render](https://render.com) choose 
 - **Voice chat**: peer-to-peer WebRTC audio (mesh, up to 12 people) with mute and speaking indicators. Text chat with system messages.
 - **AFK**: "Away" switch, or automatic after 30 s with the tab hidden. The avatar dims with an AFK tag, and the host sees "2 away" in the header. AFK viewers aren't counted in pause votes and never trigger buffer holds.
 - **Focus mode** (`F`): blacks out everything except the video and the chat sidebar.
+- **Personal subtitles**: the CC button loads an `.srt` or `.vtt` file just for you (nobody else sees it). Works on every source, including YouTube and companion mode, with on/off, S/M/L size and a ±0.5 s timing nudge for files that are slightly off. Subtitles are remembered per video for the tab and scale with the video in fullscreen.
 - **Personal fullscreen**: each viewer picks **Video only** (video plus a dimmed control bar) or **Video + chat** from the fullscreen button. Only their own screen changes. Double-click the video for video only. On phones without fullscreen support (iPhone) it fills the window instead.
 - Emoji reactions that float over the video, a voted playlist, polls, host transfer, and Discover with categories, genre filter, sorting, fuzzy search and recommendations (the catalog is free open movies from the Blender Studio; add your own in `server/src/catalog/movies.json`).
 
