@@ -1,11 +1,13 @@
 import {
   PRESENCE,
   SYNC,
+  expectedPosition,
   type Ack,
   type ClientToServerEvents,
   type NewMedia,
   type PlaybackAction,
   type PlaybackBroadcast,
+  type PlaybackState,
   type MediaSource,
   type RoomSettings,
 } from '@watch-party/shared';
@@ -32,6 +34,8 @@ export class RoomSession {
   /** Subscribers for playback broadcasts (the sync engine). */
   private playbackListeners = new Set<(b: PlaybackBroadcast) => void>();
   private pendingLatency: number | null = null;
+  /** Last playback state the server confirmed (local predictions sit on top of it). */
+  private confirmed: PlaybackState | null = null;
   private reportTimer: ReturnType<typeof setInterval> | null = null;
   private noticeId = 0;
   private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
@@ -111,6 +115,7 @@ export class RoomSession {
     await this.clock.start();
     const current = this.store.get().room?.playback;
     const snapshot = res.snapshot;
+    this.confirmed = snapshot.playback;
     this.store.set({ status: 'joined', error: null, memberId: res.memberId, room: snapshot });
     if (!current || snapshot.playback.version !== current.version) {
       this.playbackListeners.forEach((l) => l({ state: snapshot.playback, origin: { memberId: null, action: 'auto', issuedAt: 0 } }));
@@ -154,8 +159,43 @@ export class RoomSession {
       this.pendingLatency = latency;
       this.store.set((st) => ({ sync: { ...st.sync, lastControlLatencyMs: Math.round(latency) } }));
     }
+    this.confirmed = b.state;
     this.store.set({ room: { ...room, playback: b.state } });
     this.playbackListeners.forEach((l) => l(b));
+  }
+
+  /** Show a playback state locally (prediction or rollback) without waiting for the server. */
+  private applyLocal(state: PlaybackState): void {
+    const room = this.store.get().room;
+    if (!room) return;
+    this.store.set({ room: { ...room, playback: state } });
+    this.playbackListeners.forEach((l) => l({ state, origin: { memberId: this.store.get().memberId, action: 'auto', issuedAt: 0 } }));
+  }
+
+  /**
+   * What the server will most likely do with this command. It keeps the
+   * current version, so the server's real state (always a newer version)
+   * replaces it as soon as it arrives.
+   */
+  private predict(action: PlaybackAction, extra: { position?: number; rate?: number }): PlaybackState | null {
+    const room = this.store.get().room;
+    const cur = room?.playback;
+    if (!room || !cur?.media) return null;
+    const now = this.clock.serverNow();
+    const here = expectedPosition(cur, now);
+    switch (action) {
+      case 'pause':
+        return cur.playing ? { ...cur, playing: false, position: here, updatedAt: now } : null;
+      case 'play':
+        // Play from the lobby starts the show on the server; let it decide.
+        return !cur.playing && !room.lobby.active ? { ...cur, playing: true, position: cur.position, updatedAt: now } : null;
+      case 'seek':
+        return Number.isFinite(extra.position) ? { ...cur, position: Math.max(0, extra.position!), updatedAt: now } : null;
+      case 'rate':
+        return extra.rate && extra.rate !== cur.rate ? { ...cur, position: here, rate: extra.rate, updatedAt: now } : null;
+      default:
+        return null;
+    }
   }
 
   onPlaybackState(listener: (b: PlaybackBroadcast) => void): () => void {
@@ -218,14 +258,22 @@ export class RoomSession {
     });
   }
 
-  command(action: PlaybackAction, extra: { position?: number; media?: NewMedia; rate?: number } = {}): Promise<AckResult> {
+  /**
+   * Send a playback command. Play/pause/seek/speed are applied to your own
+   * player immediately (no round trip), then the server's broadcast confirms
+   * them for everyone. If the server rejects the command, or it turns out to
+   * be a no-op, your player rolls back to the last confirmed state.
+   */
+  async command(action: PlaybackAction, extra: { position?: number; media?: NewMedia; rate?: number } = {}): Promise<AckResult> {
     const room = this.store.get().room;
-    return this.call('playback:command', {
-      action,
-      ...extra,
-      baseVersion: room?.playback.version ?? 0,
-      issuedAt: this.clock.serverNow(),
-    });
+    const baseVersion = room?.playback.version ?? 0;
+    const issuedAt = this.clock.serverNow();
+    const predicted = this.predict(action, extra);
+    if (predicted) this.applyLocal(predicted);
+    const res = await this.call('playback:command', { action, ...extra, baseVersion, issuedAt });
+    // The broadcast arrives before the ack, so if we still show the prediction nothing replaced it.
+    if (predicted && this.store.get().room?.playback === predicted && this.confirmed) this.applyLocal(this.confirmed);
+    return res;
   }
 
   play = () => this.command('play');
