@@ -1,12 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
-import { REACTION_EMOJIS, formatTime } from '@watch-party/shared';
+import { CLIPS, PLAYBACK_RATES, REACTION_EMOJIS, formatTime } from '@watch-party/shared';
 import { useClient, useMe, useRoom, useSession } from '../lib/context';
 import { SyncEngine } from '../lib/syncEngine';
+import { Lobby } from './Lobby';
+import { FullscreenIcon, MutedIcon, PauseIcon, PlayIcon, VolumeIcon } from './ui';
 
-export function Player() {
+/**
+ * The stage: video (or lobby), room banners, transport controls and reactions.
+ * Keyboard: Space play/pause, ←/→ seek 10 s, C clip, M mute, F focus mode.
+ */
+export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus: () => void }) {
   const session = useSession();
-  const { canControl } = useMe();
+  const { memberId, isHost, canControl } = useMe();
   const playback = useRoom((r) => r.playback);
+  const settings = useRoom((r) => r.settings);
+  const lobbyActive = useRoom((r) => r.lobby.active);
+  const hostId = useRoom((r) => r.hostId);
+  const hostDrift = useRoom((r) => r.members.find((m) => m.id === r.hostId)?.stats?.driftMs ?? 0);
+  const lockToHost = useClient((s) => s.lockToHost);
   const containerRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<SyncEngine | null>(null);
@@ -27,6 +38,7 @@ export function Player() {
       onEnded: (id) => session.ended(id),
       onError: (msg) => session.notify('error', msg),
       onLoading: setLoading,
+      onBuffering: (id, b) => session.reportBuffering(id, b),
     });
     engineRef.current = engine;
     const initial = session.store.get().room?.playback;
@@ -46,20 +58,45 @@ export function Player() {
   useEffect(() => engineRef.current?.setVolume(volume), [volume]);
   useEffect(() => engineRef.current?.setMuted(muted), [muted]);
 
-  // Keyboard shortcuts: space = play/pause, ←/→ = ±10s.
+  // "Sync to host": follow where the host's player actually is, not just the timeline.
+  const following = lockToHost && !isHost && !!hostId;
+  useEffect(() => {
+    engineRef.current?.setTargetOffset(following ? hostDrift : 0);
+  }, [following, hostDrift]);
+
+  const pausedByMe = !playback.playing && playback.pausedBy === memberId;
+  const canPause = settings.pausePolicy === 'anyone' || canControl;
+  const canResume = canControl || pausedByMe;
+
+  const togglePlay = () => {
+    if (!playback.media) return;
+    if (playback.playing) void (canPause ? session.pause() : session.requestPause());
+    else if (canResume) void session.play();
+  };
+  const clip = (len: number) => {
+    const end = time;
+    const start = Math.max(0, end - len);
+    void session.createClip(start, end).then((r) => r.ok && session.notify('info', `Clipped the last ${Math.round(end - start)} s. Find it under Clips.`));
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !canControl || !playback.media) return;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.code === 'KeyF') onToggleFocus();
+      else if (e.code === 'Escape' && focus) onToggleFocus();
+      else if (e.code === 'KeyM') setMuted((m) => !m);
+      if (!playback.media) return;
       if (e.code === 'Space') {
         e.preventDefault();
-        void (playback.playing ? session.pause() : session.play());
-      } else if (e.code === 'ArrowRight') void session.seek(time + 10);
-      else if (e.code === 'ArrowLeft') void session.seek(Math.max(0, time - 10));
+        togglePlay();
+      } else if (e.code === 'KeyC') clip(CLIPS.defaultLength);
+      else if (canControl && e.code === 'ArrowRight') void session.seek(time + 10);
+      else if (canControl && e.code === 'ArrowLeft') void session.seek(Math.max(0, time - 10));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [canControl, playback, session, time]);
+  });
 
   const fullscreen = () => {
     if (document.fullscreenElement) void document.exitFullscreen();
@@ -67,49 +104,47 @@ export function Player() {
   };
 
   const shown = scrub ?? time;
-  const disabled = !canControl || !playback.media;
+  const external = playback.media?.source.kind === 'external';
+  const playLabel = playback.playing ? (canPause ? 'Pause' : 'Ask to pause') : canResume ? 'Play' : 'Paused';
 
   return (
-    <section className="player-col">
-      <div className="player-frame" ref={frameRef}>
+    <section className={`stage ${lobbyActive ? 'in-lobby' : ''}`}>
+      {lobbyActive && <Lobby />}
+      <div className="player-frame" ref={frameRef} aria-hidden={lobbyActive || undefined}>
         <div className="player-container" ref={containerRef} />
         {/* Shield blocks clicks on embeds so nobody bypasses room controls. */}
         <div className="player-shield" onDoubleClick={fullscreen} />
         {!playback.media && (
           <div className="player-empty">
-            <div className="big-emoji">🎬</div>
-            <p>Nothing playing yet.</p>
-            <p className="muted">Pick something from Discover or paste a link in Playlist.</p>
+            <p className="player-empty-title">Nothing playing yet</p>
+            <p className="muted">Pick something in Discover, or paste a link in Queue.</p>
           </div>
         )}
-        {loading && <div className="player-loading">Loading…</div>}
+        {loading && <div className="player-loading">Loading</div>}
         {needsClick && (
           <button className="player-unblock" onClick={() => engineRef.current?.userGesture()}>
-            ▶ Click to join playback
+            Click to join playback
             <small>Your browser blocked autoplay</small>
           </button>
         )}
+        <RoomBanners />
         <FloatingReactions />
       </div>
 
       <div className="controls">
-        <button
-          className="btn icon"
-          disabled={disabled}
-          onClick={() => void (playback.playing ? session.pause() : session.play())}
-          title={canControl ? 'Play / pause (space)' : 'Only the host can control playback'}
-        >
-          {playback.playing ? '⏸' : '▶'}
+        <button className="ctl" disabled={!playback.media || (!playback.playing && !canResume)} onClick={togglePlay} title={`${playLabel} (Space)`} aria-label={playLabel}>
+          {playback.playing ? canPause ? <PauseIcon /> : <span className="ctl-text">Ask to pause</span> : <PlayIcon />}
         </button>
         <span className="time">{formatTime(shown)}</span>
         <input
           className="seek"
           type="range"
+          aria-label="Seek"
           min={0}
           max={duration || 0}
           step={0.1}
           value={Math.min(shown, duration || 0)}
-          disabled={disabled}
+          disabled={!canControl || !playback.media || !duration}
           onChange={(e) => setScrub(Number(e.target.value))}
           onPointerUp={() => {
             if (scrub != null) void session.seek(scrub);
@@ -120,30 +155,152 @@ export function Player() {
             setScrub(null);
           }}
         />
-        <span className="time">{formatTime(duration)}</span>
-        <button className="btn icon" onClick={() => setMuted((m) => !m)} title="Mute (only you)">
-          {muted || volume === 0 ? '🔇' : '🔊'}
+        <span className="time">{duration ? formatTime(duration) : '--:--'}</span>
+        <select
+          className="speed"
+          aria-label="Playback speed"
+          title={canControl ? 'Playback speed (everyone)' : 'Playback speed (set by the host)'}
+          value={playback.rate}
+          disabled={!canControl || !playback.media}
+          onChange={(e) => void session.setRate(Number(e.target.value))}
+        >
+          {PLAYBACK_RATES.map((r) => (
+            <option key={r} value={r}>
+              {r}×
+            </option>
+          ))}
+        </select>
+        <button className="ctl hide-sm" onClick={() => setMuted((m) => !m)} title="Mute (only you, M)" aria-label="Mute">
+          {muted || volume === 0 ? <MutedIcon /> : <VolumeIcon />}
         </button>
-        <input className="volume" type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume} onChange={(e) => (setVolume(Number(e.target.value)), setMuted(false))} />
-        <button className="btn icon" onClick={fullscreen} title="Fullscreen">
-          ⛶
+        <input
+          className="volume"
+          type="range"
+          aria-label="Volume"
+          min={0}
+          max={1}
+          step={0.05}
+          value={muted ? 0 : volume}
+          onChange={(e) => (setVolume(Number(e.target.value)), setMuted(false))}
+        />
+        <ClipMenu disabled={!playback.media} onClip={clip} />
+        {!isHost && hostId && (
+          <button
+            className={`btn small ${following ? 'primary' : 'ghost'}`}
+            disabled={!playback.media}
+            onClick={() => {
+              session.setLockToHost(!lockToHost);
+              setTimeout(() => engineRef.current?.resync(), 0);
+            }}
+            title="Match the host's screen exactly instead of the room clock"
+          >
+            {following ? 'Synced to host' : 'Sync to host'}
+          </button>
+        )}
+        <button className="ctl" onClick={fullscreen} title="Fullscreen" aria-label="Fullscreen">
+          <FullscreenIcon />
         </button>
       </div>
 
-      <div className="now-playing">
-        <div>
-          <strong>{playback.media?.title ?? 'No video'}</strong>
-          {!canControl && <span className="muted"> · host controls playback</span>}
+      {!focus && (
+        <div className="now-playing">
+          <div className="now-playing-text">
+            <h2 className="now-title">{playback.media?.title ?? 'No video'}</h2>
+            <p className="muted small">
+              {[
+                !canControl && (settings.pausePolicy === 'anyone' ? 'Anyone can pause · host controls the rest' : 'Host controls playback · ask to pause'),
+                playback.rate !== 1 && `${playback.rate}×`,
+                external && 'Companion mode: play it in your own account',
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>
+          </div>
+          <div className="reaction-bar">
+            {REACTION_EMOJIS.map((e) => (
+              <button key={e} className="reaction-btn" onClick={() => session.react(e, time)} aria-label={`React ${e}`}>
+                {e}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="reaction-bar">
-          {REACTION_EMOJIS.map((e) => (
-            <button key={e} className="reaction-btn" onClick={() => session.react(e, time)} title="React">
-              {e}
+      )}
+    </section>
+  );
+}
+
+/** Clip the last N seconds (lengths from CLIPS in shared/src/config.ts). */
+function ClipMenu({ disabled, onClip }: { disabled: boolean; onClip: (len: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [open]);
+  return (
+    <div className="clip-menu" ref={ref}>
+      <button className="btn small ghost" disabled={disabled} onClick={() => setOpen((o) => !o)} aria-expanded={open} title="Clip the last few seconds (C)">
+        Clip
+      </button>
+      {open && (
+        <div className="popover" role="menu">
+          <span className="muted small">Clip the last</span>
+          {CLIPS.lengths.map((len) => (
+            <button
+              key={len}
+              role="menuitem"
+              className="btn small"
+              onClick={() => {
+                onClip(len);
+                setOpen(false);
+              }}
+            >
+              {len} s
             </button>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** Pause requests and buffering holds, shown over the bottom of the video. */
+function RoomBanners() {
+  const session = useSession();
+  const req = useRoom((r) => r.pauseRequest);
+  const hold = useRoom((r) => r.bufferHold);
+  const members = useRoom((r) => r.members);
+  const { memberId } = useMe();
+  const name = (id: string) => (id === memberId ? 'You' : (members.find((m) => m.id === id)?.name ?? 'Someone'));
+
+  if (hold) {
+    return (
+      <div className="banner" role="status">
+        Waiting for {hold.memberIds.map(name).join(', ')} to catch up
       </div>
-    </section>
+    );
+  }
+  if (!req) return null;
+  const agreed = !!memberId && req.votes.includes(memberId);
+  return (
+    <div className="banner" role="status">
+      <span>
+        <strong>{name(req.requestedBy)}</strong> {req.requestedBy === memberId ? 'asked' : 'wants'} to pause · {req.votes.length} of {req.needed}
+      </span>
+      {agreed ? (
+        req.requestedBy !== memberId && (
+          <button className="btn small ghost" onClick={() => void session.votePause(req.id, false)}>
+            Withdraw
+          </button>
+        )
+      ) : (
+        <button className="btn small primary" onClick={() => void session.votePause(req.id, true)}>
+          Agree
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -159,11 +316,7 @@ function FloatingReactions() {
         return (
           <div key={r.id} className="float" style={{ left: `${lane}%` }}>
             <span className="float-emoji">{r.emoji}</span>
-            {who && (
-              <span className="float-name" style={{ color: who.color }}>
-                {who.name}
-              </span>
-            )}
+            {who && <span className="float-name">{who.name}</span>}
           </div>
         );
       })}

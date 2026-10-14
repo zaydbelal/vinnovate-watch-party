@@ -1,53 +1,66 @@
-import { useMe, useRoom, useSession } from '../lib/context';
+import { Avatar, Switch } from '../components/ui';
+import { useClient, useMe, useRoom, useSession } from '../lib/context';
 
-/** Members, host transfer, room settings and per-member sync health. */
+/** Members (AFK, buffering, sync health), host transfer and room settings. */
 export function PeoplePanel() {
   const session = useSession();
   const members = useRoom((r) => r.members);
   const hostId = useRoom((r) => r.hostId);
-  const controlMode = useRoom((r) => r.settings.controlMode);
+  const settings = useRoom((r) => r.settings);
+  const speaking = useClient((s) => s.voice.speaking);
   const { memberId, isHost } = useMe();
 
   return (
     <div className="people">
       {isHost && (
-        <label className="setting">
-          <input
-            type="checkbox"
-            checked={controlMode === 'everyone'}
-            onChange={(e) => void session.updateSettings({ controlMode: e.target.checked ? 'everyone' : 'host' })}
+        <section className="settings">
+          <h3 className="section-label">Room rules</h3>
+          <Switch
+            checked={settings.controlMode === 'everyone'}
+            onChange={(v) => void session.updateSettings({ controlMode: v ? 'everyone' : 'host' })}
+            label="Everyone controls playback"
           />
-          Let everyone control playback
-        </label>
+          <Switch
+            checked={settings.pausePolicy === 'vote'}
+            onChange={(v) => void session.updateSettings({ pausePolicy: v ? 'vote' : 'anyone' })}
+            label="Pausing needs half the room"
+          />
+          <Switch
+            checked={settings.waitForBuffering}
+            onChange={(v) => void session.updateSettings({ waitForBuffering: v })}
+            label="Wait for anyone buffering"
+          />
+        </section>
       )}
+      <h3 className="section-label">In the room</h3>
       <ul className="member-list">
         {[...members]
           .sort((a, b) => Number(b.connected) - Number(a.connected) || a.joinedAt - b.joinedAt)
           .map((m) => {
             const drift = m.stats ? Math.abs(m.stats.driftMs) : null;
-            const health = drift == null ? '' : drift < 200 ? 'good' : drift < 500 ? 'ok' : 'bad';
+            const health = drift == null ? '' : drift < 50 ? 'good' : drift < 250 ? 'ok' : 'bad';
             return (
-              <li key={m.id} className={m.connected ? '' : 'offline'}>
-                <span className="avatar" style={{ background: m.color }}>
-                  {m.name[0]?.toUpperCase()}
-                </span>
+              <li key={m.id} className={m.connected && !m.afk ? '' : 'dim'}>
+                <Avatar member={m} speaking={speaking.includes(m.id)} />
                 <div className="member-info">
-                  <div>
+                  <div className="member-name">
                     {m.name}
                     {m.id === memberId && <span className="muted"> (you)</span>}
-                    {m.id === hostId && <span title="Host"> 👑</span>}
+                    {m.id === hostId && <span className="tag">Host</span>}
+                    {m.afk && <span className="tag warn">AFK</span>}
+                    {m.buffering && <span className="tag">Buffering</span>}
                   </div>
                   <div className="muted small">
                     {!m.connected
-                      ? 'reconnecting…'
+                      ? 'Reconnecting'
                       : m.stats
                         ? `drift ${m.stats.driftMs} ms · rtt ${m.stats.rttMs} ms${m.stats.lastControlLatencyMs != null ? ` · ctrl ${m.stats.lastControlLatencyMs} ms` : ''}`
-                        : 'syncing…'}
+                        : 'Syncing'}
                   </div>
                 </div>
                 {health && <span className={`dot ${health}`} title="Sync health" />}
                 {isHost && m.id !== memberId && m.connected && (
-                  <button className="btn small" onClick={() => void session.transferHost(m.id)}>
+                  <button className="btn small ghost" onClick={() => void session.transferHost(m.id)}>
                     Make host
                   </button>
                 )}

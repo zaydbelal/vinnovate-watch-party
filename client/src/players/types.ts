@@ -13,9 +13,14 @@ export interface PlayerAdapter {
   play(): Promise<void>;
   pause(): void;
   seek(seconds: number): void;
+  /** Position of the frame on screen right now (seconds). */
   getTime(): number;
   getDuration(): number;
   isPaused(): boolean;
+  /** True while playback is stalled waiting for data (drives auto-buffer catching). */
+  isBuffering(): boolean;
+  /** Duration of one frame in ms if known (used to pick frame-accurate tolerances). */
+  frameDurationMs?(): number | null;
   setRate(rate: number): void;
   setVolume(volume: number): void;
   setMuted(muted: boolean): void;

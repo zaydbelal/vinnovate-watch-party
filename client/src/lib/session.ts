@@ -1,8 +1,9 @@
 import {
+  PRESENCE,
   SYNC,
   type Ack,
   type ClientToServerEvents,
-  type MediaItem,
+  type NewMedia,
   type PlaybackAction,
   type PlaybackBroadcast,
   type RoomSettings,
@@ -11,8 +12,8 @@ import { ClockSync } from './clock';
 import { getSessionId, saveSessionId } from './identity';
 import { createSocket, type AppSocket } from './socket';
 import { Store, initialState, type ClientState } from './store';
+import { VoiceChat } from './voice';
 
-type NewMedia = Omit<MediaItem, 'id' | 'addedBy' | 'votes'>;
 type AckResult = { ok: boolean; error?: string };
 
 /**
@@ -30,6 +31,12 @@ export class RoomSession {
   private pendingLatency: number | null = null;
   private reportTimer: ReturnType<typeof setInterval> | null = null;
   private noticeId = 0;
+  private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
+  readonly voice = new VoiceChat(
+    this.socket,
+    () => this.store.get().memberId,
+    (voice) => this.store.set({ voice }),
+  );
 
   constructor(
     readonly code: string,
@@ -43,7 +50,11 @@ export class RoomSession {
       // "io client disconnect" means we called stop(); anything else will auto-reconnect.
       if (reason !== 'io client disconnect') this.store.set({ status: 'reconnecting' });
     });
-    s.on('room:patch', (patch) => this.store.set((st) => (st.room ? { room: { ...st.room, ...patch } } : {})));
+    s.on('room:patch', (patch) => {
+      this.store.set((st) => (st.room ? { room: { ...st.room, ...patch } } : {}));
+      if (patch.voice) this.voice.reconcile(patch.voice);
+    });
+    s.on('voice:signal', ({ from, signal }) => void this.voice.handleSignal(from, signal).catch(() => {}));
     s.on('playback:state', (b) => this.onPlayback(b));
     s.on('chat:message', (msg) =>
       this.store.set((st) => {
@@ -59,10 +70,14 @@ export class RoomSession {
     s.connect();
 
     this.reportTimer = setInterval(() => this.report(), SYNC.reportIntervalMs);
+    document.addEventListener('visibilitychange', this.onVisibility);
   }
 
   stop(): void {
     if (this.reportTimer) clearInterval(this.reportTimer);
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
+    this.voice.leave();
     this.clock.stop();
     if (this.socket.connected) this.socket.emit('room:leave');
     this.socket.removeAllListeners();
@@ -88,6 +103,32 @@ export class RoomSession {
     if (!current || snapshot.playback.version !== current.version) {
       this.playbackListeners.forEach((l) => l({ state: snapshot.playback, origin: { memberId: null, action: 'auto', issuedAt: 0 } }));
     }
+    // A reconnect drops server-side presence; restore what this client still has.
+    const { away, voice } = this.store.get();
+    if (away.manual || away.auto) this.socket.emit('presence:afk', { afk: true });
+    if (voice.joined) {
+      void this.call('voice:join', {}).then(() => this.voice.reconcile(this.store.get().room?.voice ?? []));
+    }
+  }
+
+  /** Auto-AFK: a tab hidden for PRESENCE.hiddenAfkMs marks you away; coming back clears it. */
+  private onVisibility = () => {
+    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
+    this.hiddenTimer = null;
+    if (document.hidden) {
+      this.hiddenTimer = setTimeout(() => this.setAway({ auto: true }), PRESENCE.hiddenAfkMs);
+    } else if (this.store.get().away.auto) {
+      this.setAway({ auto: false });
+    }
+  };
+
+  private setAway(patch: Partial<ClientState['away']>): void {
+    const before = this.store.get().away;
+    const away = { ...before, ...patch };
+    this.store.set({ away });
+    const was = before.manual || before.auto;
+    const now = away.manual || away.auto;
+    if (was !== now) this.socket.emit('presence:afk', { afk: now });
   }
 
   private onPlayback(b: PlaybackBroadcast): void {
@@ -142,6 +183,11 @@ export class RoomSession {
     return !!room && (room.settings.controlMode === 'everyone' || this.isHost);
   }
 
+  get canPause(): boolean {
+    const room = this.store.get().room;
+    return !!room && (room.settings.pausePolicy === 'anyone' || this.canControl);
+  }
+
   // -------------------------------------------------------------------------
   // Actions (what UI components call)
   // -------------------------------------------------------------------------
@@ -157,7 +203,7 @@ export class RoomSession {
     });
   }
 
-  command(action: PlaybackAction, extra: { position?: number; media?: NewMedia } = {}): Promise<AckResult> {
+  command(action: PlaybackAction, extra: { position?: number; media?: NewMedia; rate?: number } = {}): Promise<AckResult> {
     const room = this.store.get().room;
     return this.call('playback:command', {
       action,
@@ -171,6 +217,7 @@ export class RoomSession {
   pause = () => this.command('pause');
   seek = (position: number) => this.command('seek', { position });
   load = (media: NewMedia) => this.command('load', { media });
+  setRate = (rate: number) => this.command('rate', { rate });
   ended = (mediaId: string) => this.socket.emit('playback:ended', { mediaId });
 
   sendChat = (text: string) => this.call('chat:send', { text });
@@ -188,4 +235,41 @@ export class RoomSession {
 
   transferHost = (memberId: string) => this.call('host:transfer', { memberId });
   updateSettings = (patch: Partial<RoomSettings>) => this.call('settings:update', patch);
+
+  requestPause = () => this.call('pause:request', {});
+  votePause = (requestId: string, agree: boolean) => this.call('pause:vote', { requestId, agree });
+
+  /** "Step away" button. */
+  setStepAway = (away: boolean) => this.setAway({ manual: away, ...(away ? {} : { auto: false }) });
+  reportBuffering = (mediaId: string, buffering: boolean) => this.socket.emit('buffer:state', { mediaId, buffering });
+
+  createClip = (start: number, end: number) => this.call('clip:create', { start, end });
+  removeClip = (clipId: string) => this.call('clip:remove', { clipId });
+
+  startTrailerVote = (options: NewMedia[]) => this.call('trailers:start', { options });
+  voteTrailer = (optionId: string) => this.socket.emit('trailers:vote', { optionId });
+  closeTrailerVote = () => this.call('trailers:close', {});
+  cancelTrailerVote = () => this.call('trailers:cancel', {});
+
+  /** Open the lobby, optionally with a countdown; `active: false` starts the show. */
+  setLobby = (active: boolean, countdownSec: number | null = null) => this.call('lobby:set', { active, countdownSec });
+
+  joinVoice = async () => {
+    try {
+      await this.voice.join();
+    } catch {
+      this.notify('error', 'Microphone permission is needed for voice');
+      return;
+    }
+    const res = await this.call('voice:join', {});
+    if (!res.ok) return this.voice.leave();
+    this.voice.reconcile(this.store.get().room?.voice ?? []);
+  };
+  leaveVoice = () => {
+    this.voice.leave();
+    this.socket.emit('voice:leave', {});
+  };
+  setVoiceMuted = (muted: boolean) => this.voice.setMuted(muted);
+
+  setLockToHost = (lockToHost: boolean) => this.store.set({ lockToHost });
 }

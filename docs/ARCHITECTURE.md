@@ -35,18 +35,23 @@ So the server only broadcasts when something changes (play, pause, seek, load). 
 
 `serverNow` needs each client's clock offset from the server. `ClockSync` (`client/src/lib/clock.ts`) does NTP-style pings: `offset = serverTime + rtt/2 - localReceiveTime`. It takes 6 samples on join and one every 15 s, and trusts the sample with the lowest RTT, because that one has the least uneven-delay error.
 
-### Drift correction
+### Drift correction (frame-accurate)
 
-`SyncEngine` (`client/src/lib/syncEngine.ts`) checks every 500 ms:
+`SyncEngine` (`client/src/lib/syncEngine.ts`) checks every 250 ms:
 
-| Drift (local − expected) | Action |
+| Drift (on-screen frame − expected) | Action |
 | --- | --- |
-| > 1000 ms (or > 350 ms on YouTube) | Seek to expected, then wait 800 ms for buffering |
-| > 100 ms | Change playback rate by up to ±8%, proportional to the drift, until drift < 25 ms (hysteresis) |
+| > 1000 ms (or > 350 ms on YouTube) | Seek to expected plus a learned *seek lead*, then wait 800 ms for buffering |
+| > 42 ms (about one frame at 24 fps) | Change playback rate by up to ±8%, proportional to the drift, until drift < 12 ms (hysteresis) |
 | otherwise | Play at the room rate |
-| paused, > 40 ms off | Seek to the paused frame |
+| paused, more than half a frame off | Seek to the paused frame, so every paused screen shows the same frame |
 
-Rate correction is smooth: no visible jump and the audio pitch is preserved. YouTube only offers coarse rates, so it relies on seeking. All thresholds live in `shared/src/config.ts` (`SYNC`).
+Three details make this frame-accurate rather than "close enough":
+- **Measure the frame on screen.** `video.currentTime` runs ahead of what is displayed. `Html5Player` uses `requestVideoFrameCallback` to record the media time and presentation time of each frame, and extrapolates from the last one. It also estimates the frame duration, which sets the paused tolerance.
+- **Filter noise.** Drift is the median of the last 3 readings, so one jittery sample never triggers a correction. Large desyncs still act on the raw reading.
+- **Learn the seek lead.** Seeking a playing video takes time, so a naive seek lands behind. After each seek the engine measures where it landed and adjusts how far ahead the next seek aims (capped at `SYNC.maxSeekLeadMs`).
+
+YouTube only offers coarse rates and no frame callbacks, so it relies on seeking and is accurate to roughly 100–350 ms. All thresholds live in `shared/src/config.ts` (`SYNC`).
 
 ### Control flow of a command
 
@@ -85,6 +90,20 @@ The bench script fires 12 simultaneous conflicting commands for 20 rounds and ch
 - Spam: a token bucket per socket limits chat, reactions, playlist adds and poll creation.
 - Disallowed actions return an `{ ok: false, error }` ack, which shows as a toast.
 - The player is shielded: embed clicks are blocked, so nobody can desync themselves by clicking inside the YouTube iframe.
+
+## Room features built on the timeline
+
+All of these are rules in `Room.ts` (unit-tested) plus a small feature file. Anything time-based (countdown end, request expiry, buffer timeout) runs from `Room.tick()`, which `RoomManager` calls every 250 ms, so `Room` itself still has no timers.
+
+- **Pause policy.** `canPause()` is true for everyone under the default `pausePolicy: 'anyone'`. `canResume()` also lets whoever paused resume (`playback.pausedBy`). Under `'vote'`, `requestPause()` opens a `PauseRequest`. It pauses once `ceil(active × PAUSE_VOTE.share)` present, non-AFK members agree, and it lapses after `PAUSE_VOTE.ttlMs`. The count is redone whenever someone votes, leaves or goes AFK.
+- **Auto-buffer catching.** The client reports `buffer:state` only after a stall outlasts `BUFFERING.reportAfterMs`, and never during the post-seek settle window. The first report pauses the room into a `BufferHold`. When every held member reports recovery, the room resumes from the paused position. `maxHoldMs` caps the wait, and a per-member `cooldownMs` stops a flaky connection from pausing the room repeatedly.
+- **Lobby.** `lobby: { active, startsAt }`. Media loaded during the lobby stays paused, so every client preloads it. When the countdown ends, the play state is committed with `updatedAt = startsAt`, so the timeline starts exactly at the scheduled moment even if the tick ran late. Pressing play also ends the lobby.
+- **Trailer vote.** `TrailerVote` with 2–3 options and one vote per member. Closing it loads the winner through the same path as any other load.
+- **Clips.** `{ mediaId, start, end }` ranges of 15–90 s. Clips are references, not files, so they work for every provider. Video files can be rendered to WebM in the browser (`client/src/lib/clipExport.ts`: a hidden `<video>` + `captureStream` + `MediaRecorder`, with audio routed through Web Audio so nothing plays out loud).
+- **AFK.** `member.afk`, set by the "Away" switch or after `PRESENCE.hiddenAfkMs` with the tab hidden, and restored after a reconnect.
+- **Voice.** The server keeps the `voice` member list and relays `voice:signal` (SDP and ICE) only between two members who are both in the channel. Audio is a peer-to-peer WebRTC mesh (`client/src/lib/voice.ts`). The member with the smaller id always sends the offer, so two peers never offer at once.
+- **Speed.** A `rate` command re-anchors `position` at the current moment, so the timeline stays continuous. The drift engine multiplies its correction on top of the room rate.
+- **Streaming services.** `MediaKind 'external'` with a `provider`. `ExternalPlayer` is a virtual clock that implements `PlayerAdapter`, so the sync engine, pause votes, speed and clips work unchanged.
 
 ## Server structure
 

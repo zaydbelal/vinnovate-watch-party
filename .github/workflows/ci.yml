@@ -18,6 +18,8 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       - run: npm run typecheck
       - run: npm test
+      - name: Design anti-pattern scan (Impeccable)
+        run: npm run design:check
       - run: npm run build
       - name: Latency & concurrency bench (12 clients)
         run: |

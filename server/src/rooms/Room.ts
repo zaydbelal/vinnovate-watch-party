@@ -1,20 +1,38 @@
 import { randomUUID } from 'node:crypto';
 import {
+  BUFFERING,
+  CLIPS,
   LIMITS,
+  LOBBY,
+  PAUSE_VOTE,
+  PLAYBACK_RATES,
   REACTION_EMOJIS,
+  STREAMING_PROVIDERS,
+  TRAILERS,
+  VOICE,
   expectedPosition,
+  formatTime,
+  type AutoAction,
+  type BufferHold,
   type ChatMessage,
+  type Clip,
+  type Lobby,
   type MediaItem,
+  type MediaSource,
+  type NewMedia,
   type Member,
   type MemberStats,
+  type PlaybackAction,
   type PlaybackBroadcast,
   type PlaybackCommand,
   type PlaybackState,
+  type PauseRequest,
   type Poll,
   type Reaction,
   type RoomPatch,
   type RoomSettings,
   type RoomSnapshot,
+  type TrailerVote,
 } from '@watch-party/shared';
 
 /** Thrown for user-facing failures; the socket layer turns it into an ack error. */
@@ -33,8 +51,6 @@ export interface MemberRecord extends Member {
   socketId: string | null;
 }
 
-type NewMedia = Omit<MediaItem, 'id' | 'addedBy' | 'votes'>;
-
 const COLORS = ['#f97316', '#22c55e', '#3b82f6', '#e11d48', '#a855f7', '#14b8a6', '#eab308', '#ec4899', '#06b6d4', '#84cc16'];
 
 /**
@@ -48,8 +64,14 @@ export class Room {
   playlist: MediaItem[] = [];
   chat: ChatMessage[] = [];
   polls: Poll[] = [];
-  settings: RoomSettings = { controlMode: 'host' };
+  settings: RoomSettings = { controlMode: 'host', pausePolicy: 'anyone', waitForBuffering: true };
   history: string[] = [];
+  pauseRequest: PauseRequest | null = null;
+  clips: Clip[] = [];
+  trailerVote: TrailerVote | null = null;
+  lobby: Lobby = { active: LOBBY.openOnCreate, startsAt: null };
+  bufferHold: BufferHold | null = null;
+  voice: string[] = [];
   /** Recent control-propagation latencies reported by clients (ms), for /api/metrics. */
   readonly latencySamples: number[] = [];
   /** Set when member stats changed; RoomManager flushes them on an interval. */
@@ -57,6 +79,10 @@ export class Room {
   /** Playback version at which the current media was loaded (stale-command guard). */
   private mediaVersion = 0;
   private colorIndex = 0;
+  /** Who paused last; they may resume even without playback control. */
+  private pausedBy: string | null = null;
+  /** memberId -> time their last buffer hold ended (see BUFFERING.cooldownMs). */
+  private bufferCooldown = new Map<string, number>();
 
   constructor(
     readonly code: string,
@@ -75,7 +101,29 @@ export class Room {
       polls: this.polls,
       settings: this.settings,
       history: this.history,
+      pauseRequest: this.pauseRequest,
+      clips: this.clips,
+      trailerVote: this.trailerVote,
+      lobby: this.lobby,
+      bufferHold: this.bufferHold,
+      voice: this.voice,
     };
+  }
+
+  /** Time-based rules: countdown end, pause-request expiry, buffer-hold timeout. Called by RoomManager. */
+  tick(): void {
+    const now = this.now();
+    if (this.lobby.active && this.lobby.startsAt != null && now >= this.lobby.startsAt) this.endLobby(this.lobby.startsAt);
+    if (this.pauseRequest && now >= this.pauseRequest.expiresAt) {
+      this.system('Pause request expired');
+      this.pauseRequest = null;
+      this.emit.patch({ pauseRequest: null });
+    }
+    if (this.bufferHold && now - this.bufferHold.since >= BUFFERING.maxHoldMs) {
+      const names = this.bufferHold.memberIds.map((id) => this.nameOf(id)).join(', ');
+      this.releaseBufferHold(true);
+      this.system(`Resumed without ${names} (still buffering)`);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -107,6 +155,8 @@ export class Room {
       color: COLORS[this.colorIndex++ % COLORS.length],
       connected: true,
       joinedAt: this.now(),
+      afk: false,
+      buffering: false,
     };
     this.members.set(member.id, member);
     if (!this.hostId) this.hostId = member.id;
@@ -128,7 +178,17 @@ export class Room {
     if (!m) return;
     m.connected = false;
     m.socketId = null;
+    this.dropTransient(memberId);
     this.emit.patch({ members: this.publicMembers() });
+  }
+
+  /** Forget voice / buffering / vote involvement of someone who is gone. */
+  private dropTransient(memberId: string): void {
+    const m = this.members.get(memberId);
+    if (m) m.buffering = false;
+    if (this.voice.includes(memberId)) this.leaveVoice(memberId);
+    this.clearFromBufferHold(memberId);
+    this.recheckPauseRequest();
   }
 
   /** Permanently remove a member (left, or reconnect grace expired). */
@@ -136,6 +196,7 @@ export class Room {
     const m = this.members.get(memberId);
     if (!m) return;
     this.members.delete(memberId);
+    this.dropTransient(memberId);
     this.system(`${m.name} left`);
     if (this.hostId === memberId) this.electHost();
     this.emit.patch({ members: this.publicMembers(), hostId: this.hostId });
@@ -161,11 +222,25 @@ export class Room {
 
   updateSettings(byId: string, patch: Partial<RoomSettings>): void {
     if (this.hostId !== byId) throw new RoomError('Only the host can change settings');
-    if (patch.controlMode && patch.controlMode !== 'host' && patch.controlMode !== 'everyone') {
+    if (patch.controlMode !== undefined && patch.controlMode !== 'host' && patch.controlMode !== 'everyone') {
       throw new RoomError('Invalid control mode');
     }
-    this.settings = { ...this.settings, ...pick(patch, ['controlMode']) };
-    this.system(this.settings.controlMode === 'everyone' ? 'Everyone can now control playback' : 'Only the host can control playback');
+    if (patch.pausePolicy !== undefined && patch.pausePolicy !== 'anyone' && patch.pausePolicy !== 'vote') {
+      throw new RoomError('Invalid pause policy');
+    }
+    if (patch.waitForBuffering !== undefined && typeof patch.waitForBuffering !== 'boolean') throw new RoomError('Invalid setting');
+    const before = this.settings;
+    this.settings = { ...this.settings, ...pick(patch, ['controlMode', 'pausePolicy', 'waitForBuffering']) };
+    if (before.controlMode !== this.settings.controlMode) {
+      this.system(this.settings.controlMode === 'everyone' ? 'Everyone can now control playback' : 'Only the host can control playback');
+    }
+    if (before.pausePolicy !== this.settings.pausePolicy) {
+      this.system(this.settings.pausePolicy === 'anyone' ? 'Anyone can pause' : 'Pausing now needs half the room to agree');
+    }
+    if (before.waitForBuffering !== this.settings.waitForBuffering) {
+      this.system(this.settings.waitForBuffering ? 'The room will wait for anyone buffering' : 'The room will no longer wait for buffering');
+      if (!this.settings.waitForBuffering) this.releaseBufferHold(true);
+    }
     this.emit.patch({ settings: this.settings });
   }
 
@@ -178,6 +253,21 @@ export class Room {
 
   canControl(memberId: string): boolean {
     return this.settings.controlMode === 'everyone' || this.hostId === memberId;
+  }
+
+  /** Pausing is open to anyone by default; in vote mode non-controllers must ask. */
+  canPause(memberId: string): boolean {
+    return this.settings.pausePolicy === 'anyone' || this.canControl(memberId);
+  }
+
+  /** Whoever paused (or asked for the pause) may resume, even without control. */
+  canResume(memberId: string): boolean {
+    return this.canControl(memberId) || (!this.playback.playing && this.pausedBy != null && this.pausedBy === memberId);
+  }
+
+  /** Present and not AFK: the people a pause vote counts. */
+  activeMembers(): MemberRecord[] {
+    return [...this.members.values()].filter((m) => m.connected && !m.afk);
   }
 
   updateStats(memberId: string, stats: MemberStats): void {
@@ -206,7 +296,11 @@ export class Room {
    * Returns false when the command was a no-op (e.g. two people hit pause).
    */
   applyCommand(memberId: string, cmd: PlaybackCommand): boolean {
-    if (!this.canControl(memberId)) throw new RoomError('Only the host can control playback');
+    const allowed =
+      cmd.action === 'pause' ? this.canPause(memberId) : cmd.action === 'play' ? this.canResume(memberId) : this.canControl(memberId);
+    if (!allowed) {
+      throw new RoomError(cmd.action === 'pause' ? 'Ask the room to pause instead' : 'Only the host can control playback');
+    }
     const now = this.now();
     const cur = this.playback;
 
@@ -223,12 +317,25 @@ export class Room {
     switch (cmd.action) {
       case 'play':
         if (cur.playing) return false;
+        // Pressing play on the lobby screen starts the show.
+        if (this.lobby.active) {
+          this.endLobby(now, memberId);
+          return true;
+        }
         next = { ...cur, playing: true, position: expectedPosition(cur, now) };
         break;
       case 'pause':
         if (!cur.playing) return false;
         next = { ...cur, playing: false, position: this.clampPosition(expectedPosition(cur, issuedAt)) };
         break;
+      case 'rate': {
+        const rate = Number(cmd.rate);
+        if (!(PLAYBACK_RATES as readonly number[]).includes(rate)) throw new RoomError('Unsupported speed');
+        if (rate === cur.rate) return false;
+        next = { ...cur, position: this.clampPosition(expectedPosition(cur, now)), rate };
+        this.system(`${this.nameOf(memberId)} set speed to ${rate}×`);
+        break;
+      }
       case 'seek': {
         const position = Number(cmd.position);
         if (!Number.isFinite(position)) throw new RoomError('Invalid seek position');
@@ -244,6 +351,14 @@ export class Room {
         throw new RoomError('Unknown action');
     }
 
+    if (cmd.action === 'play' || cmd.action === 'pause') {
+      // A manual play/pause overrides automatic holds and pending requests.
+      this.bufferHold = null;
+      this.clearPauseRequest();
+      this.pausedBy = cmd.action === 'pause' ? memberId : null;
+      if (cmd.action === 'pause' && !this.canControl(memberId)) this.system(`${this.nameOf(memberId)} paused`);
+      this.emit.patch({ bufferHold: null });
+    }
     this.commit({ ...next, updatedAt: now }, memberId, cmd.action, issuedAt);
     return true;
   }
@@ -274,16 +389,23 @@ export class Room {
   private loadMedia(item: MediaItem, byId: string | null, issuedAt: number): void {
     const now = this.now();
     this.mediaVersion = this.playback.version + 1;
+    this.pausedBy = null;
+    this.clearPauseRequest();
+    this.releaseBufferHold(false);
+    for (const m of this.members.values()) m.buffering = false;
     if (item.catalogId) {
       this.history = [...this.history.filter((id) => id !== item.catalogId), item.catalogId].slice(-50);
       this.emit.patch({ history: this.history });
     }
-    this.system(`Now playing: ${item.title}`);
-    this.commit({ media: item, playing: true, position: 0, rate: 1, updatedAt: now, version: 0 }, byId, byId ? 'load' : 'auto', issuedAt);
+    // In the lobby the video loads paused so everyone can preload before showtime.
+    const playing = !this.lobby.active;
+    this.system(playing ? `Now playing: ${item.title}` : `Up next: ${item.title}`);
+    this.commit({ media: item, playing, position: 0, rate: 1, updatedAt: now, version: 0 }, byId, byId ? 'load' : 'auto', issuedAt);
   }
 
-  private commit(state: PlaybackState, memberId: string | null, action: PlaybackBroadcast['origin']['action'], issuedAt: number): void {
-    this.playback = { ...state, version: this.playback.version + 1 };
+  private commit(state: PlaybackState, memberId: string | null, action: PlaybackAction | AutoAction, issuedAt: number): void {
+    if (state.playing) this.pausedBy = null;
+    this.playback = { ...state, pausedBy: this.pausedBy, version: this.playback.version + 1 };
     this.emit.playback({ state: this.playback, origin: { memberId, action, issuedAt } });
   }
 
@@ -330,19 +452,281 @@ export class Room {
   }
 
   private makeItem(media: NewMedia, memberId: string): MediaItem {
-    const kind = media?.source?.kind;
-    const url = String(media?.source?.url ?? '').slice(0, 2000);
-    if ((kind !== 'youtube' && kind !== 'html5') || !url) throw new RoomError('Invalid media source');
     return {
       id: randomUUID(),
-      title: String(media.title || 'Untitled').slice(0, 200),
-      source: { kind, url },
+      title: String(media?.title || 'Untitled').slice(0, 200),
+      source: cleanSource(media?.source),
       thumbnail: media.thumbnail ? String(media.thumbnail).slice(0, 2000) : undefined,
       durationSec: Number.isFinite(media.durationSec) ? Number(media.durationSec) : undefined,
       catalogId: media.catalogId ? String(media.catalogId).slice(0, 100) : undefined,
       addedBy: memberId,
       votes: [],
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Pause requests (vote mode)
+  // -------------------------------------------------------------------------
+
+  pauseVotesNeeded(): number {
+    return Math.max(1, Math.ceil(this.activeMembers().length * PAUSE_VOTE.share));
+  }
+
+  /** Ask the room to pause. Joining an open request counts as agreeing. */
+  requestPause(memberId: string): void {
+    if (!this.playback.media || !this.playback.playing) throw new RoomError('Nothing is playing');
+    if (this.pauseRequest) return this.votePause(memberId, this.pauseRequest.id, true);
+    this.pauseRequest = {
+      id: randomUUID(),
+      requestedBy: memberId,
+      votes: [memberId],
+      needed: this.pauseVotesNeeded(),
+      expiresAt: this.now() + PAUSE_VOTE.ttlMs,
+    };
+    this.system(`${this.nameOf(memberId)} asked to pause`);
+    this.recheckPauseRequest();
+  }
+
+  votePause(memberId: string, requestId: string, agree: boolean): void {
+    const req = this.pauseRequest;
+    if (!req || req.id !== requestId) throw new RoomError('That request has ended');
+    req.votes = agree ? [...new Set([...req.votes, memberId])] : req.votes.filter((v) => v !== memberId);
+    this.recheckPauseRequest();
+  }
+
+  /** Re-count after a vote or a change in who is active; pause once enough agree. */
+  private recheckPauseRequest(): void {
+    const req = this.pauseRequest;
+    if (!req) return;
+    const active = new Set(this.activeMembers().map((m) => m.id));
+    req.needed = this.pauseVotesNeeded();
+    const count = req.votes.filter((v) => active.has(v)).length;
+    if (count >= req.needed && this.playback.playing) {
+      const now = this.now();
+      this.pauseRequest = null;
+      this.pausedBy = req.requestedBy;
+      this.system(`Paused by vote (${count}/${active.size})`);
+      this.emit.patch({ pauseRequest: null });
+      this.commit({ ...this.playback, playing: false, position: this.clampPosition(expectedPosition(this.playback, now)), updatedAt: now }, null, 'vote', now);
+      return;
+    }
+    this.emit.patch({ pauseRequest: req });
+  }
+
+  private clearPauseRequest(): void {
+    if (!this.pauseRequest) return;
+    this.pauseRequest = null;
+    this.emit.patch({ pauseRequest: null });
+  }
+
+  // -------------------------------------------------------------------------
+  // Presence (AFK) and auto-buffer catching
+  // -------------------------------------------------------------------------
+
+  setAfk(memberId: string, afk: boolean): void {
+    const m = this.members.get(memberId);
+    if (!m || m.afk === !!afk) return;
+    m.afk = !!afk;
+    this.system(m.afk ? `${m.name} stepped away` : `${m.name} is back`);
+    if (m.afk) this.clearFromBufferHold(memberId);
+    this.emit.patch({ members: this.publicMembers() });
+    this.recheckPauseRequest();
+  }
+
+  /**
+   * A client reports its player stalled (or recovered). With waitForBuffering
+   * on, the first stall pauses the room; when every stalled viewer has caught
+   * up, the room resumes from where it stopped.
+   */
+  setBuffering(memberId: string, mediaId: string, buffering: boolean): void {
+    const m = this.members.get(memberId);
+    if (!m || this.playback.media?.id !== mediaId || m.buffering === !!buffering) return;
+    m.buffering = !!buffering;
+    this.statsDirty = true;
+    if (!buffering) return this.clearFromBufferHold(memberId);
+
+    const cooldownUntil = (this.bufferCooldown.get(memberId) ?? 0) + BUFFERING.cooldownMs;
+    if (!this.settings.waitForBuffering || m.afk || this.lobby.active || this.now() < cooldownUntil) return;
+    if (this.bufferHold) {
+      if (!this.bufferHold.memberIds.includes(memberId)) this.bufferHold.memberIds.push(memberId);
+      this.emit.patch({ bufferHold: this.bufferHold });
+      return;
+    }
+    if (!this.playback.playing) return;
+    const now = this.now();
+    this.bufferHold = { memberIds: [memberId], since: now };
+    this.emit.patch({ bufferHold: this.bufferHold });
+    this.commit({ ...this.playback, playing: false, position: this.clampPosition(expectedPosition(this.playback, now)), updatedAt: now }, null, 'buffer', now);
+  }
+
+  private clearFromBufferHold(memberId: string): void {
+    const hold = this.bufferHold;
+    if (!hold || !hold.memberIds.includes(memberId)) return;
+    hold.memberIds = hold.memberIds.filter((id) => id !== memberId);
+    this.bufferCooldown.set(memberId, this.now());
+    if (hold.memberIds.length === 0) this.releaseBufferHold(true);
+    else this.emit.patch({ bufferHold: hold });
+  }
+
+  private releaseBufferHold(resume: boolean): void {
+    if (!this.bufferHold) return;
+    for (const id of this.bufferHold.memberIds) this.bufferCooldown.set(id, this.now());
+    this.bufferHold = null;
+    this.emit.patch({ bufferHold: null });
+    if (resume && this.playback.media && !this.playback.playing) {
+      const now = this.now();
+      this.commit({ ...this.playback, playing: true, updatedAt: now }, null, 'buffer', now);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Lobby (pre-show screen with countdown)
+  // -------------------------------------------------------------------------
+
+  setLobby(byId: string, active: boolean, countdownSec?: number | null): void {
+    if (this.hostId !== byId) throw new RoomError('Only the host can run the lobby');
+    if (!active) return this.endLobby(this.now(), byId);
+    let startsAt: number | null = null;
+    if (countdownSec != null) {
+      const sec = Number(countdownSec);
+      if (!Number.isFinite(sec) || sec < 1 || sec > LOBBY.maxCountdownSec) throw new RoomError('Invalid countdown');
+      startsAt = this.now() + Math.round(sec * 1000);
+    }
+    const wasActive = this.lobby.active;
+    this.lobby = { active: true, startsAt };
+    if (!wasActive) this.system('Intermission');
+    if (startsAt != null) this.system(`Show starts in ${formatTime(Number(countdownSec))}`);
+    this.emit.patch({ lobby: this.lobby });
+    if (this.playback.playing) {
+      const now = this.now();
+      this.releaseBufferHold(false);
+      this.commit({ ...this.playback, playing: false, position: this.clampPosition(expectedPosition(this.playback, now)), updatedAt: now }, byId, 'lobby', now);
+    }
+  }
+
+  /**
+   * Leave the lobby and roll the video. `at` anchors the timeline: when a
+   * countdown ends it is the scheduled start, so every client starts together
+   * even if this tick ran a few ms late.
+   */
+  private endLobby(at: number, byId: string | null = null): void {
+    if (!this.lobby.active) return;
+    this.lobby = { active: false, startsAt: null };
+    this.emit.patch({ lobby: this.lobby });
+    if (!this.playback.media) return;
+    this.system('Showtime');
+    if (!this.playback.playing) {
+      this.pausedBy = null;
+      this.commit({ ...this.playback, playing: true, updatedAt: Math.min(at, this.now()) }, byId, 'lobby', this.now());
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Trailer vote (host shortlists, the room picks)
+  // -------------------------------------------------------------------------
+
+  startTrailerVote(byId: string, options: NewMedia[]): TrailerVote {
+    if (this.hostId !== byId) throw new RoomError('Only the host can start a trailer vote');
+    const list = Array.isArray(options) ? options : [];
+    if (list.length < TRAILERS.minOptions || list.length > TRAILERS.maxOptions) {
+      throw new RoomError(`Pick ${TRAILERS.minOptions}-${TRAILERS.maxOptions} trailers`);
+    }
+    this.trailerVote = {
+      id: randomUUID(),
+      open: true,
+      winnerId: null,
+      options: list.map((m) => {
+        const item = this.makeItem(m, byId);
+        return { id: item.id, title: item.title, source: item.source, thumbnail: item.thumbnail, durationSec: item.durationSec, catalogId: item.catalogId, votes: [] };
+      }),
+    };
+    this.system(`${this.nameOf(byId)} started a trailer vote`);
+    this.emit.patch({ trailerVote: this.trailerVote });
+    return this.trailerVote;
+  }
+
+  /** One vote per member; voting for your current pick again removes it. */
+  voteTrailer(memberId: string, optionId: string): void {
+    const tv = this.trailerVote;
+    const option = tv?.options.find((o) => o.id === optionId);
+    if (!tv || !tv.open || !option) return;
+    const had = option.votes.includes(memberId);
+    for (const o of tv.options) o.votes = o.votes.filter((v) => v !== memberId);
+    if (!had) option.votes.push(memberId);
+    this.emit.patch({ trailerVote: tv });
+  }
+
+  /** Close voting and load the winner (ties go to the earlier option). */
+  closeTrailerVote(byId: string): void {
+    const tv = this.trailerVote;
+    if (this.hostId !== byId) throw new RoomError('Only the host can close the vote');
+    if (!tv || !tv.open) throw new RoomError('No vote is open');
+    let winner = tv.options[0];
+    for (const o of tv.options) if (o.votes.length > winner.votes.length) winner = o;
+    tv.open = false;
+    tv.winnerId = winner.id;
+    this.system(`The room picked ${winner.title} (${winner.votes.length} vote${winner.votes.length === 1 ? '' : 's'})`);
+    this.emit.patch({ trailerVote: tv });
+    const { votes: _v, id: _id, ...media } = winner;
+    this.loadMedia(this.makeItem(media, byId), byId, this.now());
+  }
+
+  cancelTrailerVote(byId: string): void {
+    if (this.hostId !== byId) throw new RoomError('Only the host can cancel the vote');
+    this.trailerVote = null;
+    this.emit.patch({ trailerVote: null });
+  }
+
+  // -------------------------------------------------------------------------
+  // Clips
+  // -------------------------------------------------------------------------
+
+  createClip(memberId: string, start: number, end: number): Clip {
+    const media = this.playback.media;
+    if (!media) throw new RoomError('Nothing is playing');
+    const e = this.clampPosition(Number(end));
+    const s = Math.max(0, Number(start));
+    if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) throw new RoomError('Invalid clip range');
+    if (e - s > CLIPS.maxSec + 0.5) throw new RoomError(`Clips can be at most ${CLIPS.maxSec} s`);
+    const clip: Clip = {
+      id: randomUUID(),
+      mediaId: media.id,
+      mediaTitle: media.title,
+      source: media.source,
+      start: s,
+      end: e,
+      createdBy: memberId,
+      createdAt: this.now(),
+    };
+    this.clips = [...this.clips, clip].slice(-CLIPS.maxPerRoom);
+    this.system(`${this.nameOf(memberId)} clipped ${formatTime(s)}–${formatTime(e)} of ${media.title}`);
+    this.emit.patch({ clips: this.clips });
+    return clip;
+  }
+
+  removeClip(memberId: string, clipId: string): void {
+    const clip = this.clips.find((c) => c.id === clipId);
+    if (!clip) throw new RoomError('Clip not found');
+    if (clip.createdBy !== memberId && this.hostId !== memberId) throw new RoomError('Only the host or whoever made it can remove this');
+    this.clips = this.clips.filter((c) => c.id !== clipId);
+    this.emit.patch({ clips: this.clips });
+  }
+
+  // -------------------------------------------------------------------------
+  // Voice channel membership (signalling itself is relayed by the socket layer)
+  // -------------------------------------------------------------------------
+
+  joinVoice(memberId: string): void {
+    if (this.voice.includes(memberId)) return;
+    if (this.voice.length >= VOICE.maxParticipants) throw new RoomError(`Voice is full (${VOICE.maxParticipants} max)`);
+    this.voice = [...this.voice, memberId];
+    this.emit.patch({ voice: this.voice });
+  }
+
+  leaveVoice(memberId: string): void {
+    if (!this.voice.includes(memberId)) return;
+    this.voice = this.voice.filter((id) => id !== memberId);
+    this.emit.patch({ voice: this.voice });
   }
 
   // -------------------------------------------------------------------------
@@ -429,6 +813,17 @@ export class Room {
   private nameOf(memberId: string): string {
     return this.members.get(memberId)?.name ?? 'Someone';
   }
+}
+
+function cleanSource(source: MediaSource | undefined): MediaSource {
+  const kind = source?.kind;
+  const url = String(source?.url ?? '').slice(0, 2000);
+  if ((kind !== 'youtube' && kind !== 'html5' && kind !== 'external') || !url) throw new RoomError('Invalid media source');
+  if (kind !== 'external') return { kind, url };
+  const provider = source?.provider;
+  if (!provider || !(provider in STREAMING_PROVIDERS)) throw new RoomError('Unsupported streaming service');
+  if (!/^https?:\/\//i.test(url)) throw new RoomError('Invalid media source');
+  return { kind, url, provider };
 }
 
 function cleanName(name: string): string {

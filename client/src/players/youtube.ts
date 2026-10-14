@@ -125,6 +125,9 @@ export class YouTubePlayer implements PlayerAdapter {
     const s = this.player?.getPlayerState();
     return s !== STATE.PLAYING && s !== STATE.BUFFERING;
   }
+  isBuffering(): boolean {
+    return this.player?.getPlayerState() === STATE.BUFFERING;
+  }
   setRate(rate: number): void {
     if (this.player && this.player.getPlaybackRate() !== rate) this.player.setPlaybackRate(rate);
   }

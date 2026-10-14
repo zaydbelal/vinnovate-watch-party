@@ -16,14 +16,16 @@
     "typecheck": "tsc -p shared && tsc -p server && tsc -p client",
     "test": "npm test -w server",
     "bench": "tsx scripts/latency-bench.ts",
-    "e2e": "node scripts/e2e-sync.mjs"
+    "e2e": "node scripts/e2e-sync.mjs",
+    "design:check": "impeccable detect client/src client/index.html"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
+    "impeccable": "^4.5.2",
+    "playwright": "^1.56.1",
     "socket.io-client": "^4.8.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "playwright": "^1.56.1"
+    "typescript": "^5.7.2"
   },
   "engines": {
     "node": ">=20"

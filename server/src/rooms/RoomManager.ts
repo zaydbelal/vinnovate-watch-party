@@ -15,6 +15,7 @@ export class RoomManager {
   private readonly emptyTimers = new Map<string, NodeJS.Timeout>();
 
   private readonly statsTimer: NodeJS.Timeout;
+  private readonly tickTimer: NodeJS.Timeout;
 
   constructor(
     private readonly io: AppServer,
@@ -23,6 +24,9 @@ export class RoomManager {
     // Sync-health stats are batched rather than broadcast on every report.
     this.statsTimer = setInterval(() => this.rooms.forEach((r) => r.flushStats()), SYNC.reportIntervalMs);
     this.statsTimer.unref();
+    // Rooms have no timers of their own; countdowns and expiries run off this tick.
+    this.tickTimer = setInterval(() => this.rooms.forEach((r) => r.tick()), LIMITS.roomTickMs);
+    this.tickTimer.unref();
   }
 
   get size(): number {

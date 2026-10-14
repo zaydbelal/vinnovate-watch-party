@@ -3,8 +3,8 @@
 | Constraint | Target | Measured | How |
 | --- | --- | --- | --- |
 | Concurrent users per room | ≥ 10 | 10, 12, 25 and 50 clients tested; capacity 50 (configurable) | `npm run bench` |
-| Playback control propagation, p95 | ≤ 250 ms | **2.5–3.0 ms** (10–50 clients) | `npm run bench` |
-| Playback drift after correction | ≤ 500 ms | **≤ 70 ms** spread between browsers; 3 s desync corrected in < 0.3 s, 0.4 s desync in ~4 s | `npm run e2e` |
+| Playback control propagation, p95 | ≤ 250 ms | **2.5–3.1 ms** (10–50 clients) | `npm run bench` |
+| Playback drift after correction | ≤ 500 ms | **< 20 ms** steady state (under one frame at 30 fps); paused tabs show the identical frame; worst case 67 ms right after a reconnect or late join | `npm run e2e` |
 | Concurrent conflicting actions | consistent state | 20/20 rounds converged (all clients at an identical version and position) | `npm run bench` |
 
 ## Test conditions
@@ -15,6 +15,28 @@
 - Clock offsets are measured, not assumed: in the browser test every tab runs `ClockSync` the same way it would on separate devices.
 
 Loopback understates real LAN latency, so the margins matter more than the absolute numbers. On a typical Wi-Fi LAN (2–10 ms RTT), propagation adds roughly one one-way trip per hop (client → server → clients), which still leaves a margin of more than 10× against the 250 ms target. To reproduce on a real network, run the server on one machine and point the bench at it from another: `npm run bench -- --url http://<server-lan-ip>:3001`.
+
+## Re-run on 2026-10-14 (frame-accurate sync engine)
+
+Same machine and method. Results after adding on-screen-frame measurement, median filtering and the learned seek lead (`SYNC` tightened to a 42 ms tolerance and 12 ms target):
+
+- `npm run bench -- --clients 12 --commands 200`: propagation p50 1.9 ms, **p95 3.1 ms**, p99 4.9 ms, max 11.5 ms. Concurrency 20/20 rounds converged.
+- `npm run e2e`: playing 10 ms, paused 7 ms (same frame; the residual is sampling skew between tabs), seek while paused 0 ms, resumed 12 ms. An artificial 250 ms desync was down to 8 ms after 6 s. Reconnect 57 ms and late joiner 67 ms, both sampled 1–3 s after joining while still converging.
+- Two-tab drift trace: tabs start about 100 ms behind the timeline (video start-up latency), are under 20 ms within 3 s, and stay at 2–19 ms from then on.
+
+The new room features don't add messages on the hot path: a pause vote, buffer hold or lobby start ends in the same single `playback:state` broadcast as a manual command.
+
+## Failure handling added with the new features
+
+| Situation | Behaviour |
+| --- | --- |
+| A viewer's connection stalls | Room pauses ("Waiting for X to catch up") and resumes when they recover; after 12 s it resumes without them and they catch up by seeking. A cooldown stops one flaky viewer from pausing the room repeatedly. |
+| A buffering viewer disconnects or goes AFK | They're removed from the hold immediately; if nobody else is buffering, the room resumes. |
+| Pause vote and someone leaves or goes AFK | The threshold is recomputed at once and may complete the vote; unanswered requests expire after 30 s. |
+| Countdown tick runs late | The timeline is anchored to the scheduled start time, so clients still start together. |
+| Voice peer fails (NAT, network change) | That one connection is dropped and re-offered on the next room update; a reconnect restores your voice membership. |
+| Clip download from a host without CORS | A clear error; the clip still exists as a shared moment for in-app replay. |
+| DRM streaming link | Companion mode (synced clock + "Open in …" link). Embedding isn't possible, and the UI says so. |
 
 ## 1. Control propagation (`scripts/latency-bench.ts`)
 

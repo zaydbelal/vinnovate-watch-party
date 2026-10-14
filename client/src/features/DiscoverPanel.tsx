@@ -3,6 +3,7 @@ import Fuse from 'fuse.js';
 import { recommend, type Movie } from '@watch-party/shared';
 import { fetchCatalog } from '../lib/api';
 import { useMe, useRoom, useSession } from '../lib/context';
+import { movieToMedia } from '../lib/media';
 
 type SortKey = 'relevance' | 'rating' | 'year' | 'title';
 type SourceFilter = 'all' | 'youtube' | 'html5';
@@ -75,15 +76,14 @@ export function DiscoverPanel() {
   const recommended = useMemo(() => recommend(movies, { history, queued: queuedIds }, 6), [movies, history, queuedIds]);
   const filtersActive = !!query.trim() || !!category || genre !== 'all' || source !== 'all' || length !== 'any' || minRating > 0;
 
-  const toMedia = (m: Movie) => ({ title: m.title, source: m.source, thumbnail: m.thumbnail, durationSec: m.durationMin * 60, catalogId: m.id });
-  const queue = (m: Movie) => void session.addToPlaylist(toMedia(m));
-  const play = (m: Movie) => void session.load(toMedia(m));
+  const queue = (m: Movie) => void session.addToPlaylist(movieToMedia(m));
+  const play = (m: Movie) => void session.load(movieToMedia(m));
 
   if (error) return <p className="error">{error}</p>;
 
   return (
     <div className="discover">
-      <input className="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Fuzzy search: try “sintle” or “robots”…" />
+      <input className="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search titles, genres, directors" aria-label="Search the catalog" />
 
       <div className="chips">
         <button className={`chip ${!category ? 'active' : ''}`} onClick={() => setCategory(null)}>
@@ -157,7 +157,7 @@ function MovieCard({ movie, canPlay, onPlay, onQueue }: { movie: Movie; canPlay:
   return (
     <div className="movie-card" title={movie.description}>
       <div className="movie-thumb">
-        {movie.thumbnail ? <img src={movie.thumbnail} alt="" loading="lazy" /> : <span>🎬</span>}
+        {movie.thumbnail ? <img src={movie.thumbnail} alt="" loading="lazy" /> : <span>{movie.title[0]}</span>}
         <span className="movie-badge">{movie.source.kind === 'youtube' ? 'YouTube' : 'File'}</span>
       </div>
       <div className="movie-title ellipsis">{movie.title}</div>
@@ -168,11 +168,11 @@ function MovieCard({ movie, canPlay, onPlay, onQueue }: { movie: Movie; canPlay:
       <div className="row">
         {canPlay && (
           <button className="btn small primary" onClick={() => onPlay(movie)}>
-            ▶ Play
+            Play
           </button>
         )}
         <button className="btn small" onClick={() => onQueue(movie)}>
-          + Queue
+          Queue
         </button>
       </div>
     </div>
