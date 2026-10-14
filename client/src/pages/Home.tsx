@@ -4,14 +4,14 @@ import { navigate } from '../App';
 import { createRoom, roomExists } from '../lib/api';
 import { getSavedName, saveName } from '../lib/identity';
 import { useTheme } from '../lib/theme';
-import { Switch } from '../components/ui';
+import { ThemePicker } from '../components/ui';
 
 export function Home() {
   const [name, setName] = useState(getSavedName);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [theme, toggleTheme] = useTheme();
+  const [theme, setTheme] = useTheme();
 
   const requireName = () => {
     if (!name.trim()) {
@@ -50,7 +50,7 @@ export function Home() {
   return (
     <main className="home">
       <div className="home-theme">
-        <Switch checked={theme === 'dark'} onChange={toggleTheme} label="Dark" />
+        <ThemePicker theme={theme} onChange={setTheme} />
       </div>
       <div className="home-inner">
         <h1 className="home-title">Watch Party</h1>

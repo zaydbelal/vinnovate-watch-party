@@ -16,6 +16,7 @@ Almost every knob lives in one of three places. Change the value, save, done.
 | What | Where | Key |
 | --- | --- | --- |
 | Colours, fonts, type sizes, spacing, radius, sidebar width | `client/src/styles.css` (top of file) | `--accent`, `--font`, `--fs-*`, `--space-*`, `--radius`, `--sidebar-width`; dark mode overrides in `:root[data-theme='dark']` |
+| Brutal theme | `client/src/styles.css` (last block, `[data-theme='brutal']`) | Its own tokens (`--rule`, `--display`, colours) plus overrides; delete the block and `'brutal'` in `client/src/lib/theme.ts` to remove it. Add a theme the same way: a `THEMES` entry and a `[data-theme='…']` block |
 | Font files | `client/public/fonts` + `@font-face` at the top of `client/src/styles.css` | Satoshi woff2 files are self-hosted. To change face, replace the files and `@font-face` rules, update `--font`, and update the preloads in `client/index.html` |
 | Sync tightness | `shared/src/config.ts` | `SYNC.*` (drift tolerance/target, paused frame tolerance, check interval, smoothing) |
 | Speed menu | `shared/src/config.ts` | `PLAYBACK_RATES` |
@@ -27,6 +28,7 @@ Almost every knob lives in one of three places. Change the value, save, done.
 | Lo-fi music tempo, volume, chords, crackle, hi-hats | `shared/src/config.ts` | `LOFI.bpm`, `volume`, `progression`, `crackle` (0 = off), `hats` (sound design in `client/src/lib/lofi.ts`) |
 | Lobby song queue size, volume, sync tolerance | `shared/src/config.ts` | `LOBBY_TRACK.maxQueue`, `volume`, `driftToleranceMs` |
 | Screen share quality, audio, who may share by default | `shared/src/config.ts` | `SCREEN_SHARE.maxHeight`, `frameRate`, `maxBitrate`, `audio`, `defaultWho` |
+| Subtitle sizes, timing nudge step, max file size | `shared/src/config.ts` | `SUBTITLES.*` (parser: `shared/src/subtitles.ts`) |
 | Trailer vote size, preview length | `shared/src/config.ts` | `TRAILERS.*` |
 | Voice: STUN/TURN servers, max people, speaking sensitivity | `shared/src/config.ts` | `VOICE.iceServers`, `maxParticipants`, `speakingThreshold` |
 | Default room rules (who controls, pause policy, buffering) | `server/src/rooms/Room.ts` | `settings = { controlMode, pausePolicy, waitForBuffering }` |

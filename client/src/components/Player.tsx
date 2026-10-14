@@ -1,16 +1,32 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CLIPS, PLAYBACK_RATES, REACTION_EMOJIS, formatTime } from '@watch-party/shared';
 import { useClient, useMe, useRoom, useSession } from '../lib/context';
 import { ScreenShareClient } from '../lib/screenShare';
 import { SyncEngine } from '../lib/syncEngine';
+import type { FullscreenMode } from '../pages/RoomPage';
 import { Lobby } from './Lobby';
+import { SubtitleMenu, SubtitleOverlay, useSubtitles } from './Subtitles';
 import { FullscreenIcon, MutedIcon, PauseIcon, PlayIcon, VolumeIcon } from './ui';
 
 /**
  * The stage: video (or lobby), room banners, transport controls and reactions.
  * Keyboard: Space play/pause, ←/→ seek 10 s, C clip, M mute, F focus mode.
  */
-export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus: () => void }) {
+export function Player({
+  focus,
+  onToggleFocus,
+  fullscreen: fsMode,
+  pseudoFullscreen,
+  onFullscreen,
+}: {
+  focus: boolean;
+  onToggleFocus: () => void;
+  /** This viewer's own fullscreen mode (never shared with the room). */
+  fullscreen: FullscreenMode;
+  /** True when the browser can't do real fullscreen and we fill the window instead. */
+  pseudoFullscreen: boolean;
+  onFullscreen: (mode: FullscreenMode) => void;
+}) {
   const session = useSession();
   const { memberId, isHost, canControl } = useMe();
   const playback = useRoom((r) => r.playback);
@@ -33,6 +49,10 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
   const [scrub, setScrub] = useState<number | null>(null);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
+  // Personal subtitles, remembered per video (by its source) for this tab.
+  const mediaKey = playback.media ? `${playback.media.source.kind}:${playback.media.source.url}` : null;
+  const [subs, updateSubs, loadSubs] = useSubtitles(mediaKey);
+  const getTime = useCallback(() => engineRef.current?.currentTime() ?? 0, []);
 
   // One engine per mounted player; it receives every playback broadcast.
   useEffect(() => {
@@ -88,8 +108,9 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.code === 'KeyF') onToggleFocus();
-      else if (e.code === 'Escape' && focus) onToggleFocus();
+      // While fullscreen, F and Esc belong to fullscreen, not focus mode.
+      if (e.code === 'KeyF' && !fsMode) onToggleFocus();
+      else if (e.code === 'Escape' && focus && !fsMode) onToggleFocus();
       else if (e.code === 'KeyM') setMuted((m) => !m);
       if (!playback.media) return;
       if (e.code === 'Space') {
@@ -103,18 +124,16 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const fullscreen = () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void frameRef.current?.requestFullscreen();
-  };
+  /** Double-click: video-only fullscreen on, or any fullscreen off. */
+  const fullscreen = () => onFullscreen(fsMode ? null : 'video');
 
   const shown = scrub ?? time;
   const external = playback.media?.source.kind === 'external';
   const playLabel = playback.playing ? (canPause ? 'Pause' : 'Ask to pause') : canResume ? 'Play' : 'Paused';
 
   return (
-    <section className={`stage ${lobbyActive && !sharing ? 'in-lobby' : ''} ${sharing ? 'is-sharing' : ''}`}>
-      {sharing && <ScreenView sharerId={sharerId} volume={volume} muted={muted} />}
+    <section className={`stage ${lobbyActive && !sharing ? 'in-lobby' : ''} ${sharing ? 'is-sharing' : ''} ${fsMode === 'video' ? 'fs-video' : ''} ${fsMode === 'video' && pseudoFullscreen ? 'pseudo-fs' : ''}`}>
+      {sharing && <ScreenView sharerId={sharerId} volume={volume} muted={muted} onDoubleClick={fullscreen} />}
       {lobbyActive && !sharing && <Lobby />}
       <div className="player-frame" ref={frameRef} aria-hidden={lobbyActive || undefined}>
         <div className="player-container" ref={containerRef} />
@@ -133,6 +152,7 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
             <small>Your browser blocked autoplay</small>
           </button>
         )}
+        {subs.track && <SubtitleOverlay state={subs} getTime={getTime} />}
         <RoomBanners />
         <FloatingReactions />
       </div>
@@ -189,6 +209,7 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
           value={muted ? 0 : volume}
           onChange={(e) => (setVolume(Number(e.target.value)), setMuted(false))}
         />
+        <SubtitleMenu state={subs} update={updateSubs} load={loadSubs} onError={(m) => session.notify('error', m)} disabled={!playback.media} />
         <ClipMenu disabled={!playback.media} onClip={clip} />
         {ScreenShareClient.supported() && !sharing && (shareWho === 'anyone' || isHost) && (
           <button className="btn small ghost hide-sm" onClick={() => void session.startScreenShare()} title="Share a screen, window or tab with the room">
@@ -208,12 +229,10 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
             {following ? 'Synced to host' : 'Sync to host'}
           </button>
         )}
-        <button className="ctl" onClick={fullscreen} title="Fullscreen" aria-label="Fullscreen">
-          <FullscreenIcon />
-        </button>
+        <FullscreenMenu mode={fsMode} onChange={onFullscreen} />
       </div>
 
-      {!focus && (
+      {!focus && fsMode !== 'video' && (
         <div className="now-playing">
           <div className="now-playing-text">
             <h2 className="now-title">{sharing ? `${sharerName ?? 'Someone'}'s screen` : (playback.media?.title ?? 'No video')}</h2>
@@ -244,7 +263,7 @@ export function Player({ focus, onToggleFocus }: { focus: boolean; onToggleFocus
  * The shared screen, shown in place of the video. Your volume and mute
  * controls apply to it too. The sharer sees their own capture, muted.
  */
-function ScreenView({ sharerId, volume, muted }: { sharerId: string; volume: number; muted: boolean }) {
+function ScreenView({ sharerId, volume, muted, onDoubleClick }: { sharerId: string; volume: number; muted: boolean; onDoubleClick: () => void }) {
   const session = useSession();
   const stream = useClient((s) => s.screen.stream);
   const { memberId, isHost } = useMe();
@@ -266,14 +285,9 @@ function ScreenView({ sharerId, volume, muted }: { sharerId: string; volume: num
     v.muted = mine || muted;
   }, [volume, muted, mine]);
 
-  const fullscreen = () => {
-    if (document.fullscreenElement) void document.exitFullscreen();
-    else void ref.current?.parentElement?.requestFullscreen();
-  };
-
   return (
     <div className="player-frame screen-frame">
-      <video ref={ref} className="player-media" playsInline autoPlay onDoubleClick={fullscreen} />
+      <video ref={ref} className="player-media" playsInline autoPlay onDoubleClick={onDoubleClick} />
       {!stream && <div className="player-loading">Connecting to {name}'s screen</div>}
       {needsClick && (
         <button className="player-unblock" onClick={() => void ref.current?.play().then(() => setNeedsClick(false))}>
@@ -289,6 +303,50 @@ function ScreenView({ sharerId, volume, muted }: { sharerId: string; volume: num
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Personal fullscreen: video only, or video + chat. Only this viewer's
+ * screen changes. On phones without fullscreen support it fills the window.
+ */
+function FullscreenMenu({ mode, onChange }: { mode: FullscreenMode; onChange: (m: FullscreenMode) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [open]);
+  if (mode) {
+    return (
+      <button className="ctl" onClick={() => onChange(null)} title="Exit fullscreen (Esc)" aria-label="Exit fullscreen">
+        <span className="ctl-text">Exit</span>
+      </button>
+    );
+  }
+  const pick = (m: FullscreenMode) => {
+    setOpen(false);
+    onChange(m);
+  };
+  return (
+    <div className="clip-menu" ref={ref}>
+      <button className="ctl" onClick={() => setOpen((o) => !o)} aria-expanded={open} title="Fullscreen (just for you)" aria-label="Fullscreen">
+        <FullscreenIcon />
+      </button>
+      {open && (
+        <div className="popover" role="menu">
+          <span className="muted small">Fullscreen</span>
+          <button role="menuitem" className="btn small" onClick={() => pick('video')}>
+            Video only
+          </button>
+          <button role="menuitem" className="btn small" onClick={() => pick('chat')}>
+            Video + chat
+          </button>
+        </div>
+      )}
     </div>
   );
 }
