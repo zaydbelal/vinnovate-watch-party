@@ -4,6 +4,7 @@ services:
   - type: web
     name: watch-party
     runtime: node
+    region: singapore # close to most viewers; Render can't move a service, so changing this means a new service
     plan: free # free sleeps when idle (first visit wakes it, ~1 min); use starter for events
     buildCommand: npm ci && npm run build
     startCommand: npm start

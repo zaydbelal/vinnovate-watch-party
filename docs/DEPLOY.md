@@ -12,6 +12,8 @@ The server serves the API, the WebSocket and the built client from one port, so 
 
 Every push to that branch redeploys automatically.
 
+**Region.** `render.yaml` uses `region: singapore`. Pick the region nearest most of your viewers (`oregon`, `ohio`, `virginia`, `frankfurt`, `singapore`). Render can't move an existing service, so to change region, delete the blueprint and create it again.
+
 **Free vs paid.** The blueprint uses Render's free plan. Free services go to sleep after a period of no traffic, and the first visitor waits about a minute while it wakes. For a planned watch party, switch the service to a paid instance in the Render dashboard, or open the site a few minutes early. Check Render's pricing page for current plans.
 
 ## Option B: Railway (always on)
