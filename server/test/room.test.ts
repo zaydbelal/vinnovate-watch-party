@@ -335,16 +335,43 @@ describe('Clips, AFK and voice', () => {
 });
 
 describe('Lobby song and screen share', () => {
-  it('host sets a looping lobby song; streaming links are rejected', () => {
+  it('song queue: first song starts, the rest queue, and an end advances once', () => {
     const s = setup();
-    s.room.setLobbyTrack(s.host.id, { title: 'Chill', source: { kind: 'youtube', url: 'jfKfPfyJRdk' } });
-    expect(s.room.lobbyTrack).toMatchObject({ title: 'Chill', startedAt: s.clock.now() });
-    expect(() => s.room.setLobbyTrack(s.guest.id, null)).toThrow(RoomError);
-    expect(() =>
-      s.room.setLobbyTrack(s.host.id, { title: 'N', source: { kind: 'external', provider: 'netflix', url: 'https://www.netflix.com/watch/1' } }),
-    ).toThrow(RoomError);
-    s.room.setLobbyTrack(s.host.id, null);
+    const song = (title: string) => ({ title, source: { kind: 'youtube' as const, url: 'jfKfPfyJRdk' } });
+    const a = s.room.addSong(s.guest.id, song('A'));
+    expect(s.room.lobbyTrack).toMatchObject({ id: a.id, title: 'A', startedAt: s.clock.now() });
+    s.room.addSong(s.host.id, song('B'));
+    s.room.addSong(s.guest.id, song('C'));
+    expect(s.room.lobbyQueue.map((x) => x.title)).toEqual(['B', 'C']);
+    s.room.songEnded(a.id);
+    s.room.songEnded(a.id); // second client's report is ignored
+    expect(s.room.lobbyTrack?.title).toBe('B');
+    expect(s.room.lobbyQueue.map((x) => x.title)).toEqual(['C']);
+  });
+
+  it('last song loops; skip and remove need host or adder; clear goes back to lo-fi', () => {
+    const s = setup();
+    const song = (title: string) => ({ title, source: { kind: 'html5' as const, url: 'https://example.com/a.mp3' } });
+    const a = s.room.addSong(s.host.id, song('A'));
+    s.room.songEnded(a.id); // empty queue: keeps looping
+    expect(s.room.lobbyTrack?.id).toBe(a.id);
+    const b = s.room.addSong(s.host.id, song('B'));
+    expect(() => s.room.removeSong(s.guest.id, b.id)).toThrow(RoomError);
+    expect(() => s.room.skipSong(s.guest.id)).toThrow(RoomError);
+    s.room.skipSong(s.host.id);
+    expect(s.room.lobbyTrack?.title).toBe('B');
+    s.room.addSong(s.guest.id, song('C'));
+    expect(() => s.room.clearSongs(s.guest.id)).toThrow(RoomError);
+    s.room.clearSongs(s.host.id);
     expect(s.room.lobbyTrack).toBeNull();
+    expect(s.room.lobbyQueue).toEqual([]);
+  });
+
+  it('rejects streaming-service links as lobby music', () => {
+    const s = setup();
+    expect(() =>
+      s.room.addSong(s.host.id, { title: 'N', source: { kind: 'external', provider: 'netflix', url: 'https://www.netflix.com/watch/1' } }),
+    ).toThrow(RoomError);
   });
 
   it('one sharer at a time, pauses the video, and ends when the sharer leaves', () => {

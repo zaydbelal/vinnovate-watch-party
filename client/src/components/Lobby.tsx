@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LOBBY, formatTime } from '@watch-party/shared';
+import { LOBBY, formatTime, type LobbySong, type LobbyTrack } from '@watch-party/shared';
 import { useMe, useRoom, useSession } from '../lib/context';
 import { LobbyTrackPlayer } from '../lib/lobbyTrack';
 import { LofiMusic } from '../lib/lofi';
@@ -29,6 +29,7 @@ export function Lobby() {
   const position = useRoom((r) => r.playback.position);
   const members = useRoom((r) => r.members);
   const track = useRoom((r) => r.lobbyTrack);
+  const queue = useRoom((r) => r.lobbyQueue);
   const { isHost } = useMe();
   const now = useServerNow();
   const [musicOn, setMusicOn] = useState(musicPref);
@@ -47,7 +48,7 @@ export function Lobby() {
   // A host-picked song replaces the generated lo-fi.
   useEffect(() => {
     const m = (music.current ??= new LofiMusic());
-    const tp = (trackPlayer.current ??= new LobbyTrackPlayer(trackMount.current!, () => session.clock.serverNow()));
+    const tp = (trackPlayer.current ??= new LobbyTrackPlayer(trackMount.current!, () => session.clock.serverNow(), (id) => session.songEnded(id)));
     const want = musicOn && !previewing;
     if (!want || track) m.stop();
     if (!want || !track) tp.stop();
@@ -115,7 +116,7 @@ export function Lobby() {
         <button className="btn ghost" onClick={toggleMusic} aria-pressed={musicOn}>
           {musicOn ? 'Music on' : 'Music off'}
         </button>
-        <span className="muted small lobby-track">{track ? `Playing ${track.title}` : 'Lo-fi radio'}</span>
+        {!track && <span className="muted small lobby-track">Lo-fi radio</span>}
         {isHost && (
           <>
             <span className="lobby-sep" />
@@ -136,7 +137,7 @@ export function Lobby() {
         )}
       </div>
 
-      {isHost && <LobbyTrackPicker hasTrack={!!track} />}
+      <SongQueue track={track} queue={queue} />
 
       <TrailerVote onPreviewing={onPreviewing} />
       {/* Off-screen mount for the lobby song's player (YouTube needs a real-sized iframe). */}
@@ -145,11 +146,18 @@ export function Lobby() {
   );
 }
 
-/** Host: paste a YouTube or audio link to loop for everyone, or go back to the lo-fi. */
-function LobbyTrackPicker({ hasTrack }: { hasTrack: boolean }) {
+/**
+ * The lobby song queue. Anyone can add a YouTube or audio link; songs play in
+ * order for everyone, and the last one loops until something else is added.
+ */
+function SongQueue({ track, queue }: { track: LobbyTrack | null; queue: LobbySong[] }) {
   const session = useSession();
+  const members = useRoom((r) => r.members);
+  const { memberId, isHost } = useMe();
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
+  const who = (id: string) => (id === memberId ? 'you' : (members.find((m) => m.id === id)?.name ?? 'someone'));
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -159,21 +167,55 @@ function LobbyTrackPicker({ hasTrack }: { hasTrack: boolean }) {
       session.notify('error', 'Paste a YouTube link or a direct audio file (.mp3, .m4a, .ogg)');
       return;
     }
-    const res = await session.setLobbyTrack({ title: media.title, source: media.source });
+    const res = await session.addSong({ title: media.title, source: media.source });
     setBusy(false);
     if (res.ok) setUrl('');
   };
+
   return (
-    <form className="lobby-music-form row" onSubmit={submit}>
-      <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a song: YouTube link or audio file" aria-label="Lobby music link" />
-      <button className="btn" disabled={busy || !url.trim()}>
-        Play for everyone
-      </button>
-      {hasTrack && (
-        <button type="button" className="btn ghost" onClick={() => void session.setLobbyTrack(null)}>
-          Back to lo-fi
-        </button>
+    <section className="songs" aria-label="Lobby music">
+      {track && (
+        <div className="song-now">
+          <div className="song-info">
+            <span className="eyebrow">Now playing</span>
+            <span className="song-title">{track.title}</span>
+            <span className="muted small">added by {who(track.addedBy)}{queue.length === 0 ? ' · on repeat' : ''}</span>
+          </div>
+          <div className="row">
+            {(isHost || track.addedBy === memberId) && (
+              <button className="btn small" onClick={() => void session.skipSong()}>
+                Skip
+              </button>
+            )}
+            {isHost && (
+              <button className="btn small ghost" onClick={() => void session.clearSongs()}>
+                Back to lo-fi
+              </button>
+            )}
+          </div>
+        </div>
       )}
-    </form>
+      {queue.length > 0 && (
+        <ol className="song-queue">
+          {queue.map((song) => (
+            <li key={song.id}>
+              <span className="song-title ellipsis">{song.title}</span>
+              <span className="muted small">{who(song.addedBy)}</span>
+              {(isHost || song.addedBy === memberId) && (
+                <button className="btn small ghost" onClick={() => void session.removeSong(song.id)}>
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+      <form className="lobby-music-form row" onSubmit={submit}>
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Add a song: YouTube link or audio file" aria-label="Song link" />
+        <button className="btn" disabled={busy || !url.trim()}>
+          {track ? 'Add to queue' : 'Play for everyone'}
+        </button>
+      </form>
+    </section>
   );
 }

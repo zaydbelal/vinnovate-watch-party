@@ -2,9 +2,11 @@ import { LOBBY_TRACK, type LobbyTrack } from '@watch-party/shared';
 import { playerFactories, type PlayerAdapter } from '../players';
 
 /**
- * Plays the host's lobby song in sync for everyone. The song loops on the
- * shared clock: position = (serverNow - startedAt) % duration, so every
- * listener hears the same bar no matter when they arrived. Reuses the video
+ * Plays the current lobby song in sync for everyone, on the shared clock:
+ * position = (serverNow - startedAt) % duration, so every listener hears the
+ * same bar no matter when they arrived. Each time the song reaches its end
+ * we report it (`onEnd`) so the room can move to the next song in the queue;
+ * until it does (or while the queue is empty) the song loops. Reuses the video
  * player adapters, so YouTube links play audio-only and files play directly.
  */
 export class LobbyTrackPlayer {
@@ -12,14 +14,17 @@ export class LobbyTrackPlayer {
   private key: string | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private loadToken = 0;
+  /** `songId:loop` of the last end we reported, so each loop end is reported once. */
+  private reportedEnd: string | null = null;
 
   constructor(
     private readonly container: HTMLElement,
     private readonly serverNow: () => number,
+    private readonly onEnd: (songId: string) => void,
   ) {}
 
   async play(track: LobbyTrack): Promise<void> {
-    const key = `${track.source.kind}:${track.source.url}:${track.startedAt}`;
+    const key = `${track.id}:${track.startedAt}`;
     if (key === this.key && this.player) return this.align(track);
     this.stop();
     this.key = key;
@@ -43,7 +48,16 @@ export class LobbyTrackPlayer {
     const p = this.player;
     const duration = p?.getDuration();
     if (!p || !duration) return;
-    const target = (((this.serverNow() - track.startedAt) / 1000) % duration + duration) % duration;
+    const elapsed = (this.serverNow() - track.startedAt) / 1000;
+    // Report every completed loop: the server ignores it while the queue is
+    // empty, and moves on as soon as someone has queued a song.
+    const loop = Math.floor(elapsed / duration);
+    const endKey = `${track.id}:${loop}`;
+    if (loop >= 1 && this.reportedEnd !== endKey) {
+      this.reportedEnd = endKey;
+      this.onEnd(track.id);
+    }
+    const target = ((elapsed % duration) + duration) % duration;
     if (Math.abs(p.getTime() - target) * 1000 > LOBBY_TRACK.driftToleranceMs) p.seek(target);
     if (p.isPaused()) void p.play().catch(() => {});
   }

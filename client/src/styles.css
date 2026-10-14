@@ -246,7 +246,15 @@ video.player-media { object-fit: contain; }
 .lobby-people { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .lobby-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .lobby-sep { width: var(--space-3); }
-.lobby-music-form { max-width: 620px; }
+.songs { display: flex; flex-direction: column; gap: var(--space-3); max-width: 620px; }
+.song-now { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.song-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.song-info .eyebrow { margin-bottom: 0; }
+.song-title { font-weight: 700; }
+.song-queue { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); counter-reset: song; }
+.song-queue li { display: flex; align-items: center; gap: var(--space-3); padding: 6px 8px; border-radius: var(--radius); background: var(--surface); counter-increment: song; }
+.song-queue li::before { content: counter(song); color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; width: 14px; }
+.song-queue .song-title { flex: 1; min-width: 0; font-weight: 500; }
 .lobby-track-mount { position: fixed; left: -10000px; top: 0; width: 240px; height: 240px; pointer-events: none; }
 
 .trailers, .trailer-setup { display: flex; flex-direction: column; gap: var(--space-3); }

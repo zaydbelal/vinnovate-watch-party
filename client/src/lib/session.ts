@@ -337,7 +337,11 @@ export class RoomSession {
 
   setLockToHost = (lockToHost: boolean) => this.store.set({ lockToHost });
 
-  setLobbyTrack = (track: { title: string; source: MediaSource } | null) => this.call('lobby:track', { track });
+  addSong = (song: { title: string; source: MediaSource }) => this.call('songs:add', song);
+  removeSong = (songId: string) => this.call('songs:remove', { songId });
+  skipSong = () => this.call('songs:skip', {});
+  clearSongs = () => this.call('songs:clear', {});
+  songEnded = (songId: string) => this.socket.emit('songs:ended', { songId });
 
   /** Pick a screen/window/tab, then announce the share; viewers request the stream. */
   startScreenShare = async () => {

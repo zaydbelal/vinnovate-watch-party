@@ -48,7 +48,7 @@ One web service, one HTTPS URL. Easiest: on [Render](https://render.com) choose 
 
 **Together**
 - **Pre-show lobby**: new rooms open on a landing screen with generated lo-fi music (Web Audio, no files; vinyl crackle optional, off by default), who's settled in, and a host countdown (1/3/5/10 min). The video preloads paused underneath, and when the countdown hits zero everyone starts on the same frame. The host can reopen it any time as an **Intermission**.
-- **Your own lobby music**: the host pastes a YouTube link or an audio file URL and it loops for everyone, in sync on the shared clock. "Back to lo-fi" returns to the generated music.
+- **Lobby song queue**: anyone pastes a YouTube link or audio file URL. Songs play in order for everyone, in sync on the shared clock, and the last one repeats until someone adds more. The host or whoever added a song can skip or remove it; "Back to lo-fi" (host) clears the queue.
 - **Screen share**: share a screen, window or tab (peer-to-peer WebRTC, up to 720p). It replaces the video for everyone and pauses the room video underneath. Late joiners pick it up automatically, and the host can end anyone's share or restrict sharing to the host. DRM services (Netflix etc.) show black when shared; that's the browser, not the app. Tab audio is shared on Chrome/Edge; whole-screen audio only on Windows.
 - **Trailer vote**: the host shortlists up to 3 trailers (catalog titles or links). Everyone can preview them locally inside the lobby and vote, and the winner is loaded for the show.
 - **Clips**: save the last 15, 30, 60 or 90 s with one click (or `C`). Everyone can rewatch a clip in a local preview, controllers can replay it for the room, and video files can be downloaded as WebM when the host allows CORS.

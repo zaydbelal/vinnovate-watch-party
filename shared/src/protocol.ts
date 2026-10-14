@@ -120,12 +120,18 @@ export interface RoomSettings {
   screenShare: 'anyone' | 'host';
 }
 
-/** A song the host picked for the lobby, looped in sync for everyone. */
-export interface LobbyTrack {
+/** A song in the lobby queue. */
+export interface LobbySong {
+  id: string;
   title: string;
   /** `youtube` (played audio-only) or `html5` (a direct audio/video file). */
   source: MediaSource;
-  /** Server-clock ms the loop started; position = elapsed % duration. */
+  addedBy: string;
+}
+
+/** The lobby song playing now, in sync for everyone. */
+export interface LobbyTrack extends LobbySong {
+  /** Server-clock ms it started; position = elapsed (looped while the queue is empty). */
   startedAt: number;
 }
 
@@ -206,8 +212,10 @@ export interface RoomSnapshot {
   bufferHold: BufferHold | null;
   /** Member ids currently in the voice channel. */
   voice: string[];
-  /** Host-picked lobby song; null plays the generated lo-fi. */
+  /** Lobby song playing now; null plays the generated lo-fi. */
   lobbyTrack: LobbyTrack | null;
+  /** Songs waiting to play in the lobby, in order. */
+  lobbyQueue: LobbySong[];
   screenShare: ScreenShare | null;
 }
 
@@ -329,8 +337,15 @@ export interface ClientToServerEvents {
   'voice:leave': (payload: Record<string, never>) => void;
   'voice:signal': (payload: { to: string; signal: VoiceSignal }) => void;
 
-  /** Host sets the lobby song (a YouTube or audio link), or null for the generated lo-fi. */
-  'lobby:track': (payload: { track: { title: string; source: MediaSource } | null }, ack?: Ack) => void;
+  /** Lobby song queue: anyone adds; the song starts at once if nothing is playing. */
+  'songs:add': (payload: { title: string; source: MediaSource }, ack?: Ack) => void;
+  'songs:remove': (payload: { songId: string }, ack?: Ack) => void;
+  /** Host or whoever added the current song. */
+  'songs:skip': (payload: Record<string, never>, ack?: Ack) => void;
+  /** A client reached the end of the current song; idempotent per song id. */
+  'songs:ended': (payload: { songId: string }) => void;
+  /** Host: stop and empty the queue (back to the generated lo-fi). */
+  'songs:clear': (payload: Record<string, never>, ack?: Ack) => void;
 
   'screen:start': (payload: Record<string, never>, ack?: Ack) => void;
   'screen:stop': (payload: Record<string, never>, ack?: Ack) => void;

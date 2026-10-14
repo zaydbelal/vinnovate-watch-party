@@ -94,8 +94,10 @@ export const LOFI = {
   ],
 } as const;
 
-/** Host-picked lobby song (pasted link), looped in sync. */
+/** Lobby song queue (pasted links), played in sync. */
 export const LOBBY_TRACK = {
+  /** Most songs waiting in the queue at once. */
+  maxQueue: 50,
   volume: 0.6,
   /** Re-align a listener whose song drifts further than this from the room. */
   driftToleranceMs: 300,

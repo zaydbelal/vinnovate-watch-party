@@ -5,7 +5,11 @@ import { onMember } from './helpers';
 export const lobbyFeature: Feature = {
   name: 'lobby',
   register(socket, ctx) {
-    onMember(socket, ctx, 'lobby:track', ({ room, member }, { track }) => room.setLobbyTrack(member.id, track));
+    onMember(socket, ctx, 'songs:add', ({ room, member }, song) => room.addSong(member.id, song), { rateLimited: true });
+    onMember(socket, ctx, 'songs:remove', ({ room, member }, { songId }) => room.removeSong(member.id, songId));
+    onMember(socket, ctx, 'songs:skip', ({ room, member }) => room.skipSong(member.id));
+    onMember(socket, ctx, 'songs:ended', ({ room }, { songId }) => room.songEnded(String(songId)));
+    onMember(socket, ctx, 'songs:clear', ({ room, member }) => room.clearSongs(member.id));
     onMember(socket, ctx, 'lobby:set', ({ room, member }, { active, countdownSec }) => room.setLobby(member.id, !!active, countdownSec));
     onMember(socket, ctx, 'trailers:start', ({ room, member }, { options }) => room.startTrailerVote(member.id, options), { rateLimited: true });
     onMember(socket, ctx, 'trailers:vote', ({ room, member }, { optionId }) => room.voteTrailer(member.id, optionId));

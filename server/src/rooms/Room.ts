@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   BUFFERING,
   CLIPS,
+  LOBBY_TRACK,
   LIMITS,
   LOBBY,
   PAUSE_VOTE,
@@ -18,6 +19,7 @@ import {
   type ChatMessage,
   type Clip,
   type Lobby,
+  type LobbySong,
   type LobbyTrack,
   type MediaItem,
   type MediaSource,
@@ -76,6 +78,7 @@ export class Room {
   bufferHold: BufferHold | null = null;
   voice: string[] = [];
   lobbyTrack: LobbyTrack | null = null;
+  lobbyQueue: LobbySong[] = [];
   screenShare: ScreenShare | null = null;
   /** Recent control-propagation latencies reported by clients (ms), for /api/metrics. */
   readonly latencySamples: number[] = [];
@@ -113,6 +116,7 @@ export class Room {
       bufferHold: this.bufferHold,
       voice: this.voice,
       lobbyTrack: this.lobbyTrack,
+      lobbyQueue: this.lobbyQueue,
       screenShare: this.screenShare,
     };
   }
@@ -742,19 +746,69 @@ export class Room {
   }
 
   // -------------------------------------------------------------------------
-  // Lobby song (host-picked, looped in sync)
+  // Lobby song queue (played in sync)
   // -------------------------------------------------------------------------
 
-  setLobbyTrack(byId: string, track: { title: string; source: MediaSource } | null): void {
-    if (this.hostId !== byId) throw new RoomError('Only the host can pick the lobby music');
-    if (!track) {
-      this.lobbyTrack = null;
+  /** Anyone can add a song. With nothing playing (lo-fi), it starts at once; otherwise it queues. */
+  addSong(memberId: string, song: { title: string; source: MediaSource }): LobbySong {
+    const source = cleanSource(song?.source);
+    if (source.kind === 'external') throw new RoomError('Use a YouTube link or an audio file for lobby music');
+    if (this.lobbyQueue.length >= LOBBY_TRACK.maxQueue) throw new RoomError('The song queue is full');
+    const item: LobbySong = { id: randomUUID(), title: String(song.title || 'Untitled').slice(0, 200), source, addedBy: memberId };
+    if (!this.lobbyTrack) {
+      this.startSong(item);
     } else {
-      const source = cleanSource(track.source);
-      if (source.kind === 'external') throw new RoomError('Use a YouTube link or an audio file for lobby music');
-      this.lobbyTrack = { title: String(track.title || 'Untitled').slice(0, 200), source, startedAt: this.now() };
-      this.system(`Lobby music: ${this.lobbyTrack.title}`);
+      this.lobbyQueue = [...this.lobbyQueue, item];
+      this.system(`${this.nameOf(memberId)} queued ${item.title}`);
+      this.emit.patch({ lobbyQueue: this.lobbyQueue });
     }
+    return item;
+  }
+
+  /** The host or whoever added a queued song can remove it. */
+  removeSong(memberId: string, songId: string): void {
+    const item = this.lobbyQueue.find((x) => x.id === songId);
+    if (!item) throw new RoomError('Song not found');
+    if (item.addedBy !== memberId && this.hostId !== memberId) throw new RoomError('Only the host or whoever added it can remove this');
+    this.lobbyQueue = this.lobbyQueue.filter((x) => x.id !== songId);
+    this.emit.patch({ lobbyQueue: this.lobbyQueue });
+  }
+
+  /** The host or whoever added the current song can skip it (to lo-fi if the queue is empty). */
+  skipSong(memberId: string): void {
+    const cur = this.lobbyTrack;
+    if (!cur) return;
+    if (cur.addedBy !== memberId && this.hostId !== memberId) throw new RoomError('Only the host or whoever added this song can skip it');
+    this.nextSong();
+  }
+
+  /**
+   * Every client reports the end of the song; only the first report for the
+   * current song counts. With an empty queue the song just keeps looping.
+   */
+  songEnded(songId: string): void {
+    if (this.lobbyTrack?.id !== songId || this.lobbyQueue.length === 0) return;
+    this.nextSong();
+  }
+
+  /** Host: stop the music and empty the queue; the lobby goes back to the generated lo-fi. */
+  clearSongs(byId: string): void {
+    if (this.hostId !== byId) throw new RoomError('Only the host can clear the music');
+    this.lobbyQueue = [];
+    this.lobbyTrack = null;
+    this.emit.patch({ lobbyTrack: null, lobbyQueue: [] });
+  }
+
+  private nextSong(): void {
+    const [next, ...rest] = this.lobbyQueue;
+    this.lobbyQueue = rest;
+    this.emit.patch({ lobbyQueue: this.lobbyQueue });
+    this.startSong(next ?? null);
+  }
+
+  private startSong(item: LobbySong | null): void {
+    this.lobbyTrack = item ? { ...item, startedAt: this.now() } : null;
+    if (item) this.system(`Now playing in the lobby: ${item.title}`);
     this.emit.patch({ lobbyTrack: this.lobbyTrack });
   }
 
