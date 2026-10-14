@@ -53,6 +53,24 @@ export function Player({
   const mediaKey = playback.media ? `${playback.media.source.kind}:${playback.media.source.url}` : null;
   const [subs, updateSubs, loadSubs] = useSubtitles(mediaKey);
   const getTime = useCallback(() => engineRef.current?.currentTime() ?? 0, []);
+  // YouTube's own captions: off unless this viewer turns them on (remembered per browser).
+  const [ytCaptions, setYtCaptions] = useState(() => {
+    try {
+      return localStorage.getItem('wp:ytcc') === 'on';
+    } catch {
+      return false;
+    }
+  });
+  const ytCaptionsRef = useRef(ytCaptions);
+  useEffect(() => {
+    ytCaptionsRef.current = ytCaptions;
+    engineRef.current?.setProviderCaptions(ytCaptions);
+    try {
+      localStorage.setItem('wp:ytcc', ytCaptions ? 'on' : 'off');
+    } catch {
+      /* ignore */
+    }
+  }, [ytCaptions]);
 
   // One engine per mounted player; it receives every playback broadcast.
   useEffect(() => {
@@ -66,6 +84,7 @@ export function Player({
       onBuffering: (id, b) => session.reportBuffering(id, b),
     });
     engineRef.current = engine;
+    engine.setProviderCaptions(ytCaptionsRef.current);
     const initial = session.store.get().room?.playback;
     if (initial) void engine.setState(initial);
     const off = session.onPlaybackState((b) => void engine.setState(b.state));
@@ -209,7 +228,14 @@ export function Player({
           value={muted ? 0 : volume}
           onChange={(e) => (setVolume(Number(e.target.value)), setMuted(false))}
         />
-        <SubtitleMenu state={subs} update={updateSubs} load={loadSubs} onError={(m) => session.notify('error', m)} disabled={!playback.media} />
+        <SubtitleMenu
+          state={subs}
+          update={updateSubs}
+          load={loadSubs}
+          onError={(m) => session.notify('error', m)}
+          disabled={!playback.media}
+          provider={playback.media?.source.kind === 'youtube' ? { name: 'YouTube', on: ytCaptions, toggle: () => setYtCaptions((v) => !v) } : undefined}
+        />
         <ClipMenu disabled={!playback.media} onClip={clip} />
         {ScreenShareClient.supported() && !sharing && (shareWho === 'anyone' || isHost) && (
           <button className="btn small ghost hide-sm" onClick={() => void session.startScreenShare()} title="Share a screen, window or tab with the room">

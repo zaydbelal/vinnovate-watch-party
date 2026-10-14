@@ -43,6 +43,7 @@ export class SyncEngine {
   private correcting = false;
   private volume = 1;
   private muted = false;
+  private providerCaptions = false;
   private timer: ReturnType<typeof setInterval>;
   private driftSamples: number[] = [];
   /**
@@ -121,6 +122,12 @@ export class SyncEngine {
     this.player?.setMuted(muted);
   }
 
+  /** The provider's built-in captions (YouTube), a personal choice. */
+  setProviderCaptions(on: boolean): void {
+    this.providerCaptions = on;
+    this.player?.setCaptions?.(on);
+  }
+
   private target(state: PlaybackState): number {
     return expectedPosition(state, this.hooks.serverNow()) + (state.playing ? this.targetOffsetMs / 1000 : 0);
   }
@@ -147,6 +154,7 @@ export class SyncEngine {
       if (token !== this.loadToken) return;
       player.setVolume(this.volume);
       player.setMuted(this.muted);
+      player.setCaptions?.(this.providerCaptions);
       player.onEnded(() => this.hooks.onEnded(media.id));
       this.loadedMediaId = media.id;
     } catch (err) {

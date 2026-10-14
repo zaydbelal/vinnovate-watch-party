@@ -15,6 +15,9 @@ interface YTPlayer {
   mute(): void;
   unMute(): void;
   destroy(): void;
+  /** Undocumented but long-standing IFrame API calls for the captions module. */
+  loadModule?(name: string): void;
+  unloadModule?(name: string): void;
 }
 interface YTNamespace {
   Player: new (el: HTMLElement, opts: Record<string, unknown>) => YTPlayer;
@@ -58,6 +61,7 @@ export class YouTubePlayer implements PlayerAdapter {
   private mount: HTMLDivElement;
   private endedCb: (() => void) | null = null;
   private stateWaiters: ((state: number) => void)[] = [];
+  private captionsOn = false;
 
   constructor(container: HTMLElement) {
     this.mount = document.createElement('div');
@@ -75,11 +79,14 @@ export class YouTubePlayer implements PlayerAdapter {
         videoId: source.url,
         width: '100%',
         height: '100%',
-        playerVars: { controls: 0, disablekb: 1, rel: 0, modestbranding: 1, playsinline: 1, iv_load_policy: 3, fs: 0 },
+        playerVars: { controls: 0, disablekb: 1, rel: 0, modestbranding: 1, playsinline: 1, iv_load_policy: 3, fs: 0, cc_load_policy: 0 },
         events: {
           onReady: () => resolve(),
           onError: (e: { data: number }) => reject(new Error(`YouTube error ${e.data}`)),
+          // The captions module (re)loads on its own after playback starts; re-apply our choice.
+          onApiChange: () => this.applyCaptions(),
           onStateChange: (e: { data: number }) => {
+            if (e.data === STATE.PLAYING) this.applyCaptions();
             if (e.data === STATE.ENDED) this.endedCb?.();
             this.stateWaiters.forEach((w) => w(e.data));
           },
@@ -127,6 +134,25 @@ export class YouTubePlayer implements PlayerAdapter {
   }
   isBuffering(): boolean {
     return this.player?.getPlayerState() === STATE.BUFFERING;
+  }
+  /**
+   * YouTube's own captions. Its controls are hidden (playback goes through the
+   * room), so the CC menu toggles them here. Off unless the viewer turns them on,
+   * even if their YouTube account has "always show captions".
+   */
+  setCaptions(on: boolean): void {
+    this.captionsOn = on;
+    this.applyCaptions();
+  }
+  private applyCaptions(): void {
+    const p = this.player;
+    if (!p) return;
+    try {
+      if (this.captionsOn) p.loadModule?.('captions');
+      else p.unloadModule?.('captions');
+    } catch {
+      /* player not ready yet; onApiChange re-applies */
+    }
   }
   setRate(rate: number): void {
     if (this.player && this.player.getPlaybackRate() !== rate) this.player.setPlaybackRate(rate);
