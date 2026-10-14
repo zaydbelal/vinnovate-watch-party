@@ -10,6 +10,7 @@ import {
   type RoomSettings,
 } from '@watch-party/shared';
 import { ClockSync } from './clock';
+import { loadIceServers } from './ice';
 import { getSessionId, saveSessionId } from './identity';
 import { createSocket, type AppSocket } from './socket';
 import { Store, initialState, type ClientState } from './store';
@@ -77,6 +78,7 @@ export class RoomSession {
     });
     s.on('notice', (n) => this.notify(n.level, n.text));
     s.connect();
+    void loadIceServers();
 
     this.reportTimer = setInterval(() => this.report(), SYNC.reportIntervalMs);
     document.addEventListener('visibilitychange', this.onVisibility);
@@ -268,6 +270,7 @@ export class RoomSession {
   setLobby = (active: boolean, countdownSec: number | null = null) => this.call('lobby:set', { active, countdownSec });
 
   joinVoice = async () => {
+    await loadIceServers();
     try {
       await this.voice.join();
     } catch {
@@ -290,6 +293,7 @@ export class RoomSession {
 
   /** Pick a screen/window/tab, then announce the share; viewers request the stream. */
   startScreenShare = async () => {
+    await loadIceServers();
     try {
       await this.screen.capture();
     } catch {

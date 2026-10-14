@@ -1,4 +1,5 @@
-import { SCREEN_SHARE, VOICE, type ScreenSignal } from '@watch-party/shared';
+import { SCREEN_SHARE, type ScreenSignal } from '@watch-party/shared';
+import { iceServers } from './ice';
 import type { AppSocket } from './socket';
 
 export interface ScreenState {
@@ -77,7 +78,7 @@ export class ScreenShareClient {
     }
     if (signal.type === 'offer') {
       this.closeIncoming();
-      const pc = new RTCPeerConnection({ iceServers: VOICE.iceServers });
+      const pc = new RTCPeerConnection({ iceServers: iceServers() });
       const incoming = { from, pc, pendingIce: [] as RTCIceCandidateInit[] };
       this.incoming = incoming;
       pc.onicecandidate = (e) => e.candidate && this.sendIce(from, e.candidate);
@@ -110,7 +111,7 @@ export class ScreenShareClient {
   private async offerTo(viewerId: string): Promise<void> {
     if (!this.local) return;
     this.outgoing.get(viewerId)?.close();
-    const pc = new RTCPeerConnection({ iceServers: VOICE.iceServers });
+    const pc = new RTCPeerConnection({ iceServers: iceServers() });
     this.outgoing.set(viewerId, pc);
     pc.onicecandidate = (e) => e.candidate && this.sendIce(viewerId, e.candidate);
     pc.onconnectionstatechange = () => {

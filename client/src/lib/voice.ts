@@ -1,4 +1,5 @@
 import { VOICE, type VoiceSignal } from '@watch-party/shared';
+import { iceServers } from './ice';
 import type { AppSocket } from './socket';
 
 export interface VoiceState {
@@ -100,7 +101,7 @@ export class VoiceChat {
   }
 
   private connect(id: string): Peer {
-    const pc = new RTCPeerConnection({ iceServers: VOICE.iceServers });
+    const pc = new RTCPeerConnection({ iceServers: iceServers() });
     const audio = new Audio();
     audio.autoplay = true;
     const peer: Peer = { pc, audio, analyser: null, pendingIce: [] };

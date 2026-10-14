@@ -32,6 +32,10 @@ npm run build
 npm start            # http://localhost:3001
 ```
 
+## Deploy
+
+One web service, one HTTPS URL. Easiest: on [Render](https://render.com) choose **New → Blueprint** and pick this repo (`render.yaml` does the rest). A `Dockerfile` covers Fly.io, Railway, Cloud Run or a VPS. For voice and screen share across the internet, add a TURN relay with `TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL`. Full steps: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
+
 ## Features
 
 **Playback**
@@ -110,3 +114,5 @@ Because client and server share `shared/src/protocol.ts`, renaming an event or c
 | `EMPTY_ROOM_TTL_MS` | `600000` | When an empty room is deleted |
 | `MAX_MEMBERS` | `50` | Room capacity |
 | `VITE_SERVER_URL` | same origin | Client: server URL if hosted separately |
+| `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | unset | TURN relay for voice/screen share across the internet (comma-separate several URLs) |
+| `ICE_SERVERS` | unset | JSON array of `RTCIceServer` objects; replaces the default STUN/TURN list |

@@ -61,6 +61,11 @@ app.get('/api/metrics', (_req, res) => {
   });
 });
 
+/** STUN/TURN servers for voice and screen share (configured with env vars, see server/src/config.ts). */
+app.get('/api/ice', (_req, res) => {
+  res.json({ iceServers: config.iceServers });
+});
+
 app.get('/api/health', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
 
 // Serve the built client in production (single port deploy).
