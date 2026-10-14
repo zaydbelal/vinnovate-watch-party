@@ -16,7 +16,7 @@ Almost every knob lives in one of three places. Change the value, save, done.
 | What | Where | Key |
 | --- | --- | --- |
 | Colours, fonts, type sizes, spacing, radius, sidebar width | `client/src/styles.css` (top of file) | `--accent`, `--font`, `--fs-*`, `--space-*`, `--radius`, `--sidebar-width`; dark mode overrides in `:root[data-theme='dark']` |
-| Font file | `client/index.html` | Fontshare link for Satoshi. Swap it (and `--font`) for another face, or self-host |
+| Font files | `client/public/fonts` + `@font-face` at the top of `client/src/styles.css` | Satoshi woff2 files are self-hosted. To change face, replace the files and `@font-face` rules, update `--font`, and update the preloads in `client/index.html` |
 | Sync tightness | `shared/src/config.ts` | `SYNC.*` (drift tolerance/target, paused frame tolerance, check interval, smoothing) |
 | Speed menu | `shared/src/config.ts` | `PLAYBACK_RATES` |
 | Wait-for-buffering behaviour | `shared/src/config.ts` | `BUFFERING.reportAfterMs`, `maxHoldMs`, `cooldownMs` |

@@ -1,3 +1,9 @@
+/* Satoshi (Indian Type Foundry, via Fontshare), self-hosted from client/public/fonts. */
+@font-face { font-family: 'Satoshi'; src: url('/fonts/Satoshi-400.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Satoshi'; src: url('/fonts/Satoshi-500.woff2') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Satoshi'; src: url('/fonts/Satoshi-700.woff2') format('woff2'); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Satoshi'; src: url('/fonts/Satoshi-900.woff2') format('woff2'); font-weight: 900; font-style: normal; font-display: swap; }
+
 /*
  * Theme tokens. Restyle the whole app from here.
  * Separation comes from spacing and tonal fills, never borders or shadows.

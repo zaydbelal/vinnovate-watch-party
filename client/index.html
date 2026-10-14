@@ -6,9 +6,9 @@
     <meta name="color-scheme" content="light dark" />
     <title>Watch Party</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23c2410c'/><path d='M12 9v14l11-7z' fill='white'/></svg>" />
-    <!-- Satoshi (Fontshare, free for commercial use). To self-host, drop the woff2 files in client/public/fonts and swap this for @font-face rules. -->
-    <link rel="preconnect" href="https://api.fontshare.com" crossorigin />
-    <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&display=swap" />
+    <!-- Satoshi is self-hosted (client/public/fonts, @font-face in src/styles.css). Preload the two weights used above the fold. -->
+    <link rel="preload" href="/fonts/Satoshi-400.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/Satoshi-900.woff2" as="font" type="font/woff2" crossorigin />
     <script>
       // Apply the saved theme before first paint (see src/lib/theme.ts).
       try {
