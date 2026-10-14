@@ -51,7 +51,7 @@ export function Lobby() {
     window.addEventListener('pointerdown', tryStart, { once: true });
     return () => window.removeEventListener('pointerdown', tryStart);
   }, [musicOn, previewing]);
-  useEffect(() => () => music.current?.stop(), []);
+  useEffect(() => () => music.current?.dispose(), []);
 
   const toggleMusic = () => {
     const next = !musicOn;

@@ -2,8 +2,8 @@ import { LOFI } from '@watch-party/shared';
 
 /**
  * Lo-fi lobby music, synthesised live with Web Audio: soft electric-piano
- * chords, a round bass, a lazy swung beat and vinyl crackle, all through a
- * warm low-pass. No audio files, nothing to license, and it never repeats
+ * chords, a round bass and a lazy swung beat, all through a warm low-pass.
+ * Optional vinyl crackle (LOFI.crackle, off by default). No audio files, nothing to license, and it never repeats
  * exactly because the melody and hats are lightly randomised.
  *
  * Tweak tempo, volume and chords in LOFI (shared/src/config.ts).
@@ -18,15 +18,35 @@ export class LofiMusic {
   private nextBeatTime = 0;
   private beat = 0;
 
+  /** Bumped by every start/stop; a start that finds it changed after awaiting gives up. */
+  private generation = 0;
+  private starting: Promise<void> | null = null;
+  private suspendTimer: ReturnType<typeof setTimeout> | null = null;
+
   get playing(): boolean {
     return this.timer != null;
   }
 
-  /** Must be called from a user gesture the first time (autoplay policy). */
-  async start(): Promise<void> {
-    if (this.timer) return;
+  /**
+   * Must be called from a user gesture the first time (autoplay policy).
+   * Safe to call repeatedly: concurrent calls share one start, so there is
+   * only ever one scheduler and one set of nodes.
+   */
+  start(): Promise<void> {
+    if (this.timer) return Promise.resolve();
+    if (this.starting) return this.starting;
+    const gen = ++this.generation;
+    this.starting = this.doStart(gen).finally(() => (this.starting = null));
+    return this.starting;
+  }
+
+  private async doStart(gen: number): Promise<void> {
     const ctx = (this.ctx ??= new AudioContext());
+    if (this.suspendTimer) clearTimeout(this.suspendTimer);
+    this.suspendTimer = null;
+    // Resolves only after a user gesture; stop() may have been called meanwhile.
     await ctx.resume();
+    if (gen !== this.generation || this.timer) return;
     const master = ctx.createGain();
     master.gain.setValueAtTime(0, ctx.currentTime);
     master.gain.linearRampToValueAtTime(LOFI.volume, ctx.currentTime + 2);
@@ -37,27 +57,49 @@ export class LofiMusic {
     warmth.connect(master).connect(ctx.destination);
     this.master = master;
     this.bus = warmth;
-    this.noise = this.makeNoise(ctx);
-    this.startCrackle(ctx);
+    this.noise ??= this.makeNoise(ctx);
+    if (LOFI.crackle > 0) this.startCrackle(ctx);
     this.nextBeatTime = ctx.currentTime + 0.1;
     this.beat = 0;
     // Look-ahead scheduler: queue notes slightly ahead so timing stays tight.
     this.timer = setInterval(() => this.schedule(), 100);
   }
 
+  /** Fade out, then suspend the whole audio context so nothing can keep sounding. */
   stop(): void {
-    if (!this.ctx || !this.master || !this.timer) return;
-    clearInterval(this.timer);
+    this.generation++; // cancels a start still waiting for a gesture
+    const { ctx, master, crackle } = this;
+    if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    const { ctx, master } = this;
-    master.gain.cancelScheduledValues(ctx.currentTime);
-    master.gain.setValueAtTime(master.gain.value, ctx.currentTime);
-    master.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.8);
-    const crackle = this.crackle;
-    setTimeout(() => {
-      crackle?.stop();
-      master.disconnect();
-    }, 900);
+    this.crackle = null;
+    this.master = null;
+    if (!ctx) return;
+    if (master) {
+      master.gain.cancelScheduledValues(ctx.currentTime);
+      master.gain.setValueAtTime(master.gain.value, ctx.currentTime);
+      master.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
+    }
+    if (this.suspendTimer) clearTimeout(this.suspendTimer);
+    this.suspendTimer = setTimeout(() => {
+      this.suspendTimer = null;
+      try {
+        crackle?.stop();
+      } catch {
+        /* already stopped */
+      }
+      master?.disconnect();
+      if (!this.timer && ctx.state === 'running') void ctx.suspend();
+    }, 700);
+  }
+
+  /** Release the audio device entirely (leaving the lobby). */
+  dispose(): void {
+    this.stop();
+    if (this.suspendTimer) clearTimeout(this.suspendTimer);
+    const ctx = this.ctx;
+    this.ctx = null;
+    this.noise = null;
+    void ctx?.close();
   }
 
   private schedule(): void {
@@ -84,8 +126,10 @@ export class LofiMusic {
     if (inBar === 0 || (inBar === 2 && Math.random() < 0.5)) this.kick(t);
     if (inBar === 2 && Math.random() < 0.6) this.kick(t + swing);
     if (inBar === 1 || inBar === 3) this.snare(t);
-    this.hat(t, 0.03);
-    if (Math.random() < 0.8) this.hat(t + swing, 0.018);
+    if (LOFI.hats > 0) {
+      this.hat(t, 0.02 * LOFI.hats);
+      if (Math.random() < 0.8) this.hat(t + swing, 0.012 * LOFI.hats);
+    }
     // Sparse pentatonic melody, an octave above the chord.
     if (Math.random() < 0.3) {
       const scale = [0, 2, 4, 7, 9];
@@ -173,19 +217,27 @@ export class LofiMusic {
     src.stop(t + dur + 0.02);
   }
 
-  /** Looping vinyl texture: quiet hiss plus sparse pops. */
+  /**
+   * Looping vinyl texture: a few soft, rounded pops per second over silence
+   * (no continuous hiss, which reads as static on most speakers).
+   */
   private startCrackle(ctx: AudioContext): void {
     const len = ctx.sampleRate * 4;
     const buf = ctx.createBuffer(1, len, ctx.sampleRate);
     const d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * 0.012 + (Math.random() < 0.0004 ? (Math.random() * 2 - 1) * 0.5 : 0);
+    const pops = 12; // per 4 s loop
+    for (let p = 0; p < pops; p++) {
+      const at = Math.floor(Math.random() * (len - 200));
+      const amp = (0.15 + Math.random() * 0.25) * LOFI.crackle;
+      // A short decaying click rather than a single-sample spike.
+      for (let i = 0; i < 120; i++) d[at + i] += (Math.random() * 2 - 1) * amp * Math.exp(-i / 18);
+    }
     const src = ctx.createBufferSource();
     src.buffer = buf;
     src.loop = true;
     const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.value = 3000;
-    filter.Q.value = 0.5;
+    filter.type = 'lowpass';
+    filter.frequency.value = 2500;
     src.connect(filter).connect(this.master!);
     src.start();
     this.crackle = src;

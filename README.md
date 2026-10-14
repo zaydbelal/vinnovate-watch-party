@@ -43,7 +43,7 @@ npm start            # http://localhost:3001
 - **Streaming services (companion mode)**: paste a Netflix, Prime Video, JioHotstar or ZEE5 link. These services use DRM and block embedding and remote control, so no website can play them inside another page. Instead the room shows a large synced timecode with an "Open in …" link (Netflix opens at the current second), and each viewer plays the title in their own account. Pause, resume, seek and speed cues still come from the room.
 
 **Together**
-- **Pre-show lobby**: new rooms open on a landing screen with generated lo-fi music (Web Audio, no files), who's settled in, and a host countdown (1/3/5/10 min). The video preloads paused underneath, and when the countdown hits zero everyone starts on the same frame. The host can reopen it any time as an **Intermission**.
+- **Pre-show lobby**: new rooms open on a landing screen with generated lo-fi music (Web Audio, no files; vinyl crackle optional, off by default), who's settled in, and a host countdown (1/3/5/10 min). The video preloads paused underneath, and when the countdown hits zero everyone starts on the same frame. The host can reopen it any time as an **Intermission**.
 - **Trailer vote**: the host shortlists up to 3 trailers (catalog titles or links). Everyone can preview them locally inside the lobby and vote, and the winner is loaded for the show.
 - **Clips**: save the last 15, 30, 60 or 90 s with one click (or `C`). Everyone can rewatch a clip in a local preview, controllers can replay it for the room, and video files can be downloaded as WebM when the host allows CORS.
 - **Voice chat**: peer-to-peer WebRTC audio (mesh, up to 12 people) with mute and speaking indicators. Text chat with system messages.

@@ -81,6 +81,10 @@ export const LOBBY = {
 export const LOFI = {
   bpm: 74,
   volume: 0.22,
+  /** Vinyl crackle level, 0 (off) to 1. Sparse soft pops only, no hiss. */
+  crackle: 0,
+  /** Hi-hat level, 0 (off) to 1. */
+  hats: 0.5,
   /** Chords as semitones above C3 (Fmaj7, Em7, Dm7, Cmaj7). */
   progression: [
     [5, 9, 12, 16],
