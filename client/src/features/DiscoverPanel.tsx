@@ -3,18 +3,9 @@ import Fuse from 'fuse.js';
 import { recommend, type Movie } from '@watch-party/shared';
 import { fetchCatalog } from '../lib/api';
 import { useMe, useRoom, useSession } from '../lib/context';
+import { movieToMedia } from '../lib/media';
 
 type SortKey = 'relevance' | 'rating' | 'year' | 'title';
-type SourceFilter = 'all' | 'youtube' | 'html5';
-type LengthFilter = 'any' | 'short' | 'medium' | 'long';
-
-const LENGTHS: Record<LengthFilter, { label: string; test: (min: number) => boolean }> = {
-  any: { label: 'Any length', test: () => true },
-  short: { label: '< 5 min', test: (m) => m < 5 },
-  medium: { label: '5–15 min', test: (m) => m >= 5 && m <= 15 },
-  long: { label: '> 15 min', test: (m) => m > 15 },
-};
-
 /** Fuzzy search weights: tweak to change what matters most when searching. */
 const FUSE_OPTIONS = {
   threshold: 0.4,
@@ -38,9 +29,6 @@ export function DiscoverPanel() {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<string | null>(null);
   const [genre, setGenre] = useState('all');
-  const [source, setSource] = useState<SourceFilter>('all');
-  const [length, setLength] = useState<LengthFilter>('any');
-  const [minRating, setMinRating] = useState(0);
   const [sort, setSort] = useState<SortKey>('relevance');
 
   useEffect(() => {
@@ -56,10 +44,7 @@ export function DiscoverPanel() {
     list = list.filter(
       (m) =>
         (!category || m.categories.includes(category)) &&
-        (genre === 'all' || m.genres.includes(genre)) &&
-        (source === 'all' || m.source.kind === source) &&
-        LENGTHS[length].test(m.durationMin) &&
-        m.rating >= minRating,
+        (genre === 'all' || m.genres.includes(genre)),
     );
     const sorters: Record<SortKey, ((a: Movie, b: Movie) => number) | null> = {
       relevance: null, // keep Fuse's ranking (or catalog order)
@@ -69,21 +54,20 @@ export function DiscoverPanel() {
     };
     const sorter = sorters[sort];
     return sorter ? [...list].sort(sorter) : list;
-  }, [fuse, movies, query, category, genre, source, length, minRating, sort]);
+  }, [fuse, movies, query, category, genre, sort]);
 
   const queuedIds = useMemo(() => playlist.map((p) => p.catalogId).filter((x): x is string => !!x), [playlist]);
   const recommended = useMemo(() => recommend(movies, { history, queued: queuedIds }, 6), [movies, history, queuedIds]);
-  const filtersActive = !!query.trim() || !!category || genre !== 'all' || source !== 'all' || length !== 'any' || minRating > 0;
+  const filtersActive = !!query.trim() || !!category || genre !== 'all';
 
-  const toMedia = (m: Movie) => ({ title: m.title, source: m.source, thumbnail: m.thumbnail, durationSec: m.durationMin * 60, catalogId: m.id });
-  const queue = (m: Movie) => void session.addToPlaylist(toMedia(m));
-  const play = (m: Movie) => void session.load(toMedia(m));
+  const queue = (m: Movie) => void session.addToPlaylist(movieToMedia(m));
+  const play = (m: Movie) => void session.load(movieToMedia(m));
 
   if (error) return <p className="error">{error}</p>;
 
   return (
     <div className="discover">
-      <input className="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Fuzzy search: try “sintle” or “robots”…" />
+      <input className="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search titles, genres, directors" aria-label="Search the catalog" />
 
       <div className="chips">
         <button className={`chip ${!category ? 'active' : ''}`} onClick={() => setCategory(null)}>
@@ -103,23 +87,6 @@ export function DiscoverPanel() {
             <option key={g}>{g}</option>
           ))}
         </select>
-        <select value={length} onChange={(e) => setLength(e.target.value as LengthFilter)}>
-          {Object.entries(LENGTHS).map(([k, v]) => (
-            <option key={k} value={k}>
-              {v.label}
-            </option>
-          ))}
-        </select>
-        <select value={source} onChange={(e) => setSource(e.target.value as SourceFilter)}>
-          <option value="all">Any source</option>
-          <option value="youtube">YouTube</option>
-          <option value="html5">Video file</option>
-        </select>
-        <select value={minRating} onChange={(e) => setMinRating(Number(e.target.value))}>
-          <option value={0}>Any rating</option>
-          <option value={6}>★ 6+</option>
-          <option value={7}>★ 7+</option>
-        </select>
         <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
           <option value="relevance">Sort: relevance</option>
           <option value="rating">Sort: rating</option>
@@ -128,9 +95,9 @@ export function DiscoverPanel() {
         </select>
       </div>
 
-      {!filtersActive && recommended.length > 0 && (
+      {!filtersActive && (history.length > 0 || queuedIds.length > 0) && recommended.length > 0 && (
         <>
-          <h4>{history.length || queuedIds.length ? 'Recommended for this room' : 'Popular picks'}</h4>
+          <h4>Recommended for this room</h4>
           <div className="movie-grid">
             {recommended.map((m) => (
               <MovieCard key={m.id} movie={m} canPlay={canControl} onPlay={play} onQueue={queue} />
@@ -154,11 +121,11 @@ export function DiscoverPanel() {
 }
 
 function MovieCard({ movie, canPlay, onPlay, onQueue }: { movie: Movie; canPlay: boolean; onPlay: (m: Movie) => void; onQueue: (m: Movie) => void }) {
+  const [thumbFailed, setThumbFailed] = useState(false);
   return (
     <div className="movie-card" title={movie.description}>
       <div className="movie-thumb">
-        {movie.thumbnail ? <img src={movie.thumbnail} alt="" loading="lazy" /> : <span>🎬</span>}
-        <span className="movie-badge">{movie.source.kind === 'youtube' ? 'YouTube' : 'File'}</span>
+        {movie.thumbnail && !thumbFailed ? <img src={movie.thumbnail} alt="" loading="lazy" onError={() => setThumbFailed(true)} /> : <span>{movie.title[0]}</span>}
       </div>
       <div className="movie-title ellipsis">{movie.title}</div>
       <div className="muted small">
@@ -168,11 +135,11 @@ function MovieCard({ movie, canPlay, onPlay, onQueue }: { movie: Movie; canPlay:
       <div className="row">
         {canPlay && (
           <button className="btn small primary" onClick={() => onPlay(movie)}>
-            ▶ Play
+            Play
           </button>
         )}
         <button className="btn small" onClick={() => onQueue(movie)}>
-          + Queue
+          Queue
         </button>
       </div>
     </div>

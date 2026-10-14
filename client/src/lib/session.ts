@@ -1,18 +1,24 @@
 import {
+  PRESENCE,
   SYNC,
+  expectedPosition,
   type Ack,
   type ClientToServerEvents,
-  type MediaItem,
+  type NewMedia,
   type PlaybackAction,
   type PlaybackBroadcast,
+  type PlaybackState,
+  type MediaSource,
   type RoomSettings,
 } from '@watch-party/shared';
 import { ClockSync } from './clock';
+import { loadIceServers } from './ice';
 import { getSessionId, saveSessionId } from './identity';
 import { createSocket, type AppSocket } from './socket';
 import { Store, initialState, type ClientState } from './store';
+import { ScreenShareClient } from './screenShare';
+import { VoiceChat } from './voice';
 
-type NewMedia = Omit<MediaItem, 'id' | 'addedBy' | 'votes'>;
 type AckResult = { ok: boolean; error?: string };
 
 /**
@@ -28,8 +34,21 @@ export class RoomSession {
   /** Subscribers for playback broadcasts (the sync engine). */
   private playbackListeners = new Set<(b: PlaybackBroadcast) => void>();
   private pendingLatency: number | null = null;
+  /** Last playback state the server confirmed (local predictions sit on top of it). */
+  private confirmed: PlaybackState | null = null;
   private reportTimer: ReturnType<typeof setInterval> | null = null;
   private noticeId = 0;
+  private hiddenTimer: ReturnType<typeof setTimeout> | null = null;
+  readonly voice = new VoiceChat(
+    this.socket,
+    () => this.store.get().memberId,
+    (voice) => this.store.set({ voice }),
+  );
+  readonly screen = new ScreenShareClient(
+    this.socket,
+    (screen) => this.store.set({ screen }),
+    () => void this.stopScreenShare(),
+  );
 
   constructor(
     readonly code: string,
@@ -43,7 +62,13 @@ export class RoomSession {
       // "io client disconnect" means we called stop(); anything else will auto-reconnect.
       if (reason !== 'io client disconnect') this.store.set({ status: 'reconnecting' });
     });
-    s.on('room:patch', (patch) => this.store.set((st) => (st.room ? { room: { ...st.room, ...patch } } : {})));
+    s.on('room:patch', (patch) => {
+      this.store.set((st) => (st.room ? { room: { ...st.room, ...patch } } : {}));
+      if (patch.voice) this.voice.reconcile(patch.voice);
+      if ('screenShare' in patch) this.screen.sync(patch.screenShare?.memberId ?? null, this.store.get().memberId);
+    });
+    s.on('screen:signal', ({ from, signal }) => void this.screen.handleSignal(from, signal).catch(() => {}));
+    s.on('voice:signal', ({ from, signal }) => void this.voice.handleSignal(from, signal).catch(() => {}));
     s.on('playback:state', (b) => this.onPlayback(b));
     s.on('chat:message', (msg) =>
       this.store.set((st) => {
@@ -57,12 +82,18 @@ export class RoomSession {
     });
     s.on('notice', (n) => this.notify(n.level, n.text));
     s.connect();
+    void loadIceServers();
 
     this.reportTimer = setInterval(() => this.report(), SYNC.reportIntervalMs);
+    document.addEventListener('visibilitychange', this.onVisibility);
   }
 
   stop(): void {
     if (this.reportTimer) clearInterval(this.reportTimer);
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
+    this.voice.leave();
+    this.screen.destroy();
     this.clock.stop();
     if (this.socket.connected) this.socket.emit('room:leave');
     this.socket.removeAllListeners();
@@ -84,10 +115,40 @@ export class RoomSession {
     await this.clock.start();
     const current = this.store.get().room?.playback;
     const snapshot = res.snapshot;
+    this.confirmed = snapshot.playback;
     this.store.set({ status: 'joined', error: null, memberId: res.memberId, room: snapshot });
     if (!current || snapshot.playback.version !== current.version) {
       this.playbackListeners.forEach((l) => l({ state: snapshot.playback, origin: { memberId: null, action: 'auto', issuedAt: 0 } }));
     }
+    // Pick up (or re-request) an ongoing screen share; a reconnect drops the old link.
+    this.screen.sync(null, res.memberId);
+    this.screen.sync(snapshot.screenShare?.memberId ?? null, res.memberId);
+    // A reconnect drops server-side presence; restore what this client still has.
+    const { away, voice } = this.store.get();
+    if (away.manual || away.auto) this.socket.emit('presence:afk', { afk: true });
+    if (voice.joined) {
+      void this.call('voice:join', {}).then(() => this.voice.reconcile(this.store.get().room?.voice ?? []));
+    }
+  }
+
+  /** Auto-AFK: a tab hidden for PRESENCE.hiddenAfkMs marks you away; coming back clears it. */
+  private onVisibility = () => {
+    if (this.hiddenTimer) clearTimeout(this.hiddenTimer);
+    this.hiddenTimer = null;
+    if (document.hidden) {
+      this.hiddenTimer = setTimeout(() => this.setAway({ auto: true }), PRESENCE.hiddenAfkMs);
+    } else if (this.store.get().away.auto) {
+      this.setAway({ auto: false });
+    }
+  };
+
+  private setAway(patch: Partial<ClientState['away']>): void {
+    const before = this.store.get().away;
+    const away = { ...before, ...patch };
+    this.store.set({ away });
+    const was = before.manual || before.auto;
+    const now = away.manual || away.auto;
+    if (was !== now) this.socket.emit('presence:afk', { afk: now });
   }
 
   private onPlayback(b: PlaybackBroadcast): void {
@@ -98,8 +159,43 @@ export class RoomSession {
       this.pendingLatency = latency;
       this.store.set((st) => ({ sync: { ...st.sync, lastControlLatencyMs: Math.round(latency) } }));
     }
+    this.confirmed = b.state;
     this.store.set({ room: { ...room, playback: b.state } });
     this.playbackListeners.forEach((l) => l(b));
+  }
+
+  /** Show a playback state locally (prediction or rollback) without waiting for the server. */
+  private applyLocal(state: PlaybackState): void {
+    const room = this.store.get().room;
+    if (!room) return;
+    this.store.set({ room: { ...room, playback: state } });
+    this.playbackListeners.forEach((l) => l({ state, origin: { memberId: this.store.get().memberId, action: 'auto', issuedAt: 0 } }));
+  }
+
+  /**
+   * What the server will most likely do with this command. It keeps the
+   * current version, so the server's real state (always a newer version)
+   * replaces it as soon as it arrives.
+   */
+  private predict(action: PlaybackAction, extra: { position?: number; rate?: number }): PlaybackState | null {
+    const room = this.store.get().room;
+    const cur = room?.playback;
+    if (!room || !cur?.media) return null;
+    const now = this.clock.serverNow();
+    const here = expectedPosition(cur, now);
+    switch (action) {
+      case 'pause':
+        return cur.playing ? { ...cur, playing: false, position: here, updatedAt: now } : null;
+      case 'play':
+        // Play from the lobby starts the show on the server; let it decide.
+        return !cur.playing && !room.lobby.active ? { ...cur, playing: true, position: cur.position, updatedAt: now } : null;
+      case 'seek':
+        return Number.isFinite(extra.position) ? { ...cur, position: Math.max(0, extra.position!), updatedAt: now } : null;
+      case 'rate':
+        return extra.rate && extra.rate !== cur.rate ? { ...cur, position: here, rate: extra.rate, updatedAt: now } : null;
+      default:
+        return null;
+    }
   }
 
   onPlaybackState(listener: (b: PlaybackBroadcast) => void): () => void {
@@ -142,6 +238,11 @@ export class RoomSession {
     return !!room && (room.settings.controlMode === 'everyone' || this.isHost);
   }
 
+  get canPause(): boolean {
+    const room = this.store.get().room;
+    return !!room && (room.settings.pausePolicy === 'anyone' || this.canControl);
+  }
+
   // -------------------------------------------------------------------------
   // Actions (what UI components call)
   // -------------------------------------------------------------------------
@@ -157,20 +258,29 @@ export class RoomSession {
     });
   }
 
-  command(action: PlaybackAction, extra: { position?: number; media?: NewMedia } = {}): Promise<AckResult> {
+  /**
+   * Send a playback command. Play/pause/seek/speed are applied to your own
+   * player immediately (no round trip), then the server's broadcast confirms
+   * them for everyone. If the server rejects the command, or it turns out to
+   * be a no-op, your player rolls back to the last confirmed state.
+   */
+  async command(action: PlaybackAction, extra: { position?: number; media?: NewMedia; rate?: number } = {}): Promise<AckResult> {
     const room = this.store.get().room;
-    return this.call('playback:command', {
-      action,
-      ...extra,
-      baseVersion: room?.playback.version ?? 0,
-      issuedAt: this.clock.serverNow(),
-    });
+    const baseVersion = room?.playback.version ?? 0;
+    const issuedAt = this.clock.serverNow();
+    const predicted = this.predict(action, extra);
+    if (predicted) this.applyLocal(predicted);
+    const res = await this.call('playback:command', { action, ...extra, baseVersion, issuedAt });
+    // The broadcast arrives before the ack, so if we still show the prediction nothing replaced it.
+    if (predicted && this.store.get().room?.playback === predicted && this.confirmed) this.applyLocal(this.confirmed);
+    return res;
   }
 
   play = () => this.command('play');
   pause = () => this.command('pause');
   seek = (position: number) => this.command('seek', { position });
   load = (media: NewMedia) => this.command('load', { media });
+  setRate = (rate: number) => this.command('rate', { rate });
   ended = (mediaId: string) => this.socket.emit('playback:ended', { mediaId });
 
   sendChat = (text: string) => this.call('chat:send', { text });
@@ -188,4 +298,64 @@ export class RoomSession {
 
   transferHost = (memberId: string) => this.call('host:transfer', { memberId });
   updateSettings = (patch: Partial<RoomSettings>) => this.call('settings:update', patch);
+
+  requestPause = () => this.call('pause:request', {});
+  votePause = (requestId: string, agree: boolean) => this.call('pause:vote', { requestId, agree });
+
+  /** "Step away" button. */
+  setStepAway = (away: boolean) => this.setAway({ manual: away, ...(away ? {} : { auto: false }) });
+  reportBuffering = (mediaId: string, buffering: boolean) => this.socket.emit('buffer:state', { mediaId, buffering });
+
+  createClip = (start: number, end: number) => this.call('clip:create', { start, end });
+  removeClip = (clipId: string) => this.call('clip:remove', { clipId });
+
+  startTrailerVote = (options: NewMedia[]) => this.call('trailers:start', { options });
+  voteTrailer = (optionId: string) => this.socket.emit('trailers:vote', { optionId });
+  closeTrailerVote = () => this.call('trailers:close', {});
+  cancelTrailerVote = () => this.call('trailers:cancel', {});
+
+  /** Open the lobby, optionally with a countdown; `active: false` starts the show. */
+  setLobby = (active: boolean, countdownSec: number | null = null) => this.call('lobby:set', { active, countdownSec });
+
+  joinVoice = async () => {
+    await loadIceServers();
+    try {
+      await this.voice.join();
+    } catch {
+      this.notify('error', 'Microphone permission is needed for voice');
+      return;
+    }
+    const res = await this.call('voice:join', {});
+    if (!res.ok) return this.voice.leave();
+    this.voice.reconcile(this.store.get().room?.voice ?? []);
+  };
+  leaveVoice = () => {
+    this.voice.leave();
+    this.socket.emit('voice:leave', {});
+  };
+  setVoiceMuted = (muted: boolean) => this.voice.setMuted(muted);
+
+  setLockToHost = (lockToHost: boolean) => this.store.set({ lockToHost });
+
+  addSong = (song: { title: string; source: MediaSource }) => this.call('songs:add', song);
+  removeSong = (songId: string) => this.call('songs:remove', { songId });
+  skipSong = () => this.call('songs:skip', {});
+  clearSongs = () => this.call('songs:clear', {});
+  songEnded = (songId: string) => this.socket.emit('songs:ended', { songId });
+
+  /** Pick a screen/window/tab, then announce the share; viewers request the stream. */
+  startScreenShare = async () => {
+    await loadIceServers();
+    try {
+      await this.screen.capture();
+    } catch {
+      return; // cancelled the picker
+    }
+    const res = await this.call('screen:start', {});
+    if (!res.ok) this.screen.stopSharing();
+  };
+  stopScreenShare = async () => {
+    this.screen.stopSharing();
+    await this.call('screen:stop', {});
+  };
 }

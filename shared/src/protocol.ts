@@ -11,12 +11,21 @@
 // Domain models
 // ---------------------------------------------------------------------------
 
-export type MediaKind = 'youtube' | 'html5';
+export type MediaKind = 'youtube' | 'html5' | 'external';
+
+/**
+ * DRM streaming services that cannot be embedded. Rooms follow them in
+ * "companion mode": everyone plays the title in their own account and the
+ * room keeps the shared clock (see client/src/players/external.ts).
+ */
+export type StreamingProvider = 'netflix' | 'prime' | 'hotstar' | 'zee5';
 
 export interface MediaSource {
   kind: MediaKind;
-  /** YouTube video id for `youtube`, a direct file URL for `html5`. */
+  /** YouTube video id for `youtube`, a direct file URL for `html5`, the title page for `external`. */
   url: string;
+  /** Set for `external` sources. */
+  provider?: StreamingProvider;
 }
 
 export interface MediaItem {
@@ -41,6 +50,8 @@ export interface PlaybackState {
   updatedAt: number;
   /** Monotonic counter. Clients ignore states older than the one they have. */
   version: number;
+  /** Who paused (or asked for the pause); they may resume without playback control. */
+  pausedBy?: string | null;
 }
 
 export interface MemberStats {
@@ -57,6 +68,10 @@ export interface Member {
   connected: boolean;
   joinedAt: number;
   stats?: MemberStats;
+  /** Stepped away (manually, or their tab has been hidden for a while). */
+  afk: boolean;
+  /** Their player is stalled waiting for data. */
+  buffering: boolean;
 }
 
 export interface ChatMessage {
@@ -88,9 +103,94 @@ export interface Poll {
 
 export type ControlMode = 'host' | 'everyone';
 
+/**
+ * Who may pause. `anyone`: every viewer can pause instantly.
+ * `vote`: viewers who can't control playback ask, and the room pauses once
+ * half of the active (present, not AFK) viewers agree.
+ */
+export type PausePolicy = 'anyone' | 'vote';
+
 export interface RoomSettings {
-  /** Who may play / pause / seek / change the video. */
+  /** Who may play / seek / change speed / change the video. */
   controlMode: ControlMode;
+  pausePolicy: PausePolicy;
+  /** Pause the room while someone's player is buffering, resume when they catch up. */
+  waitForBuffering: boolean;
+  /** Who may share their screen. */
+  screenShare: 'anyone' | 'host';
+}
+
+/** A song in the lobby queue. */
+export interface LobbySong {
+  id: string;
+  title: string;
+  /** `youtube` (played audio-only) or `html5` (a direct audio/video file). */
+  source: MediaSource;
+  addedBy: string;
+}
+
+/** The lobby song playing now, in sync for everyone. */
+export interface LobbyTrack extends LobbySong {
+  /** Server-clock ms it started; position = elapsed (looped while the queue is empty). */
+  startedAt: number;
+}
+
+export interface ScreenShare {
+  memberId: string;
+  startedAt: number;
+}
+
+export interface PauseRequest {
+  id: string;
+  requestedBy: string;
+  /** Member ids that agreed (the requester counts). */
+  votes: string[];
+  /** Votes needed right now: half of the active viewers, rounded up. */
+  needed: number;
+  expiresAt: number;
+}
+
+/** A shared moment: a 15–90 s range of a video anyone in the room can rewatch. */
+export interface Clip {
+  id: string;
+  mediaId: string;
+  mediaTitle: string;
+  source: MediaSource;
+  start: number;
+  end: number;
+  createdBy: string;
+  createdAt: number;
+}
+
+export interface TrailerOption {
+  id: string;
+  title: string;
+  source: MediaSource;
+  thumbnail?: string;
+  durationSec?: number;
+  catalogId?: string;
+  votes: string[];
+}
+
+/** Host-picked shortlist the room votes on before the show starts. */
+export interface TrailerVote {
+  id: string;
+  options: TrailerOption[];
+  open: boolean;
+  winnerId: string | null;
+}
+
+/** The pre-show (or intermission) screen. */
+export interface Lobby {
+  active: boolean;
+  /** Server-clock ms when the show starts; null means waiting for the host. */
+  startsAt: number | null;
+}
+
+/** Set while the room is paused waiting for someone's player to buffer. */
+export interface BufferHold {
+  memberIds: string[];
+  since: number;
 }
 
 /** Everything a client needs to render a room. Sent on join and reconnect. */
@@ -105,6 +205,18 @@ export interface RoomSnapshot {
   settings: RoomSettings;
   /** Catalog ids watched in this room, newest last. Drives recommendations. */
   history: string[];
+  pauseRequest: PauseRequest | null;
+  clips: Clip[];
+  trailerVote: TrailerVote | null;
+  lobby: Lobby;
+  bufferHold: BufferHold | null;
+  /** Member ids currently in the voice channel. */
+  voice: string[];
+  /** Lobby song playing now; null plays the generated lo-fi. */
+  lobbyTrack: LobbyTrack | null;
+  /** Songs waiting to play in the lobby, in order. */
+  lobbyQueue: LobbySong[];
+  screenShare: ScreenShare | null;
 }
 
 /** Keys of `RoomSnapshot` that can be pushed as partial updates. */
@@ -114,14 +226,19 @@ export type RoomPatch = Partial<Omit<RoomSnapshot, 'code'>>;
 // Payloads
 // ---------------------------------------------------------------------------
 
-export type PlaybackAction = 'play' | 'pause' | 'seek' | 'load';
+export type PlaybackAction = 'play' | 'pause' | 'seek' | 'load' | 'rate';
+
+/** Why the server changed playback on its own. */
+export type AutoAction = 'auto' | 'buffer' | 'vote' | 'lobby' | 'screen';
 
 export interface PlaybackCommand {
   action: PlaybackAction;
   /** Target position (seconds) for seek; current position for play/pause. */
   position?: number;
   /** For `load`. */
-  media?: Omit<MediaItem, 'id' | 'addedBy' | 'votes'>;
+  media?: NewMedia;
+  /** For `rate`: one of PLAYBACK_RATES. */
+  rate?: number;
   /** The playback version the client was looking at when it issued this. */
   baseVersion: number;
   /** Issue time expressed in *server* clock (client clock + offset), ms. */
@@ -132,7 +249,7 @@ export interface PlaybackBroadcast {
   state: PlaybackState;
   origin: {
     memberId: string | null;
-    action: PlaybackAction | 'auto';
+    action: PlaybackAction | AutoAction;
     /** Server-clock time the command was issued by the client. */
     issuedAt: number;
   };
@@ -150,6 +267,17 @@ export type JoinResponse =
   | { ok: false; error: string };
 
 export type Ack = (res: { ok: boolean; error?: string }) => void;
+
+/** What a client sends to add media; the server fills in id, addedBy and votes. */
+export type NewMedia = Omit<MediaItem, 'id' | 'addedBy' | 'votes'>;
+
+/** WebRTC signalling relayed between two voice participants. */
+export type VoiceSignal =
+  | { type: 'offer' | 'answer'; sdp: string }
+  | { type: 'ice'; candidate: { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null } };
+
+/** Screen-share signalling: viewers send `want` to ask the sharer for a stream. */
+export type ScreenSignal = VoiceSignal | { type: 'want' };
 
 export interface Reaction {
   id: string;
@@ -176,7 +304,7 @@ export interface ClientToServerEvents {
   'chat:send': (payload: { text: string }, ack?: Ack) => void;
   'reaction:send': (payload: { emoji: string; position: number }) => void;
 
-  'playlist:add': (payload: { media: Omit<MediaItem, 'id' | 'addedBy' | 'votes'> }, ack?: Ack) => void;
+  'playlist:add': (payload: { media: NewMedia }, ack?: Ack) => void;
   'playlist:remove': (payload: { itemId: string }, ack?: Ack) => void;
   'playlist:vote': (payload: { itemId: string }) => void;
   'playlist:play': (payload: { itemId: string }, ack?: Ack) => void;
@@ -187,6 +315,41 @@ export interface ClientToServerEvents {
 
   'host:transfer': (payload: { memberId: string }, ack?: Ack) => void;
   'settings:update': (payload: Partial<RoomSettings>, ack?: Ack) => void;
+
+  'pause:request': (payload: Record<string, never>, ack?: Ack) => void;
+  'pause:vote': (payload: { requestId: string; agree: boolean }, ack?: Ack) => void;
+
+  'presence:afk': (payload: { afk: boolean }) => void;
+  'buffer:state': (payload: { mediaId: string; buffering: boolean }) => void;
+
+  'clip:create': (payload: { start: number; end: number }, ack?: Ack) => void;
+  'clip:remove': (payload: { clipId: string }, ack?: Ack) => void;
+
+  'trailers:start': (payload: { options: NewMedia[] }, ack?: Ack) => void;
+  'trailers:vote': (payload: { optionId: string }) => void;
+  'trailers:close': (payload: Record<string, never>, ack?: Ack) => void;
+  'trailers:cancel': (payload: Record<string, never>, ack?: Ack) => void;
+
+  /** Open the lobby (optionally with a countdown in seconds) or close it to start the show. */
+  'lobby:set': (payload: { active: boolean; countdownSec?: number | null }, ack?: Ack) => void;
+
+  'voice:join': (payload: Record<string, never>, ack?: Ack) => void;
+  'voice:leave': (payload: Record<string, never>) => void;
+  'voice:signal': (payload: { to: string; signal: VoiceSignal }) => void;
+
+  /** Lobby song queue: anyone adds; the song starts at once if nothing is playing. */
+  'songs:add': (payload: { title: string; source: MediaSource }, ack?: Ack) => void;
+  'songs:remove': (payload: { songId: string }, ack?: Ack) => void;
+  /** Host or whoever added the current song. */
+  'songs:skip': (payload: Record<string, never>, ack?: Ack) => void;
+  /** A client reached the end of the current song; idempotent per song id. */
+  'songs:ended': (payload: { songId: string }) => void;
+  /** Host: stop and empty the queue (back to the generated lo-fi). */
+  'songs:clear': (payload: Record<string, never>, ack?: Ack) => void;
+
+  'screen:start': (payload: Record<string, never>, ack?: Ack) => void;
+  'screen:stop': (payload: Record<string, never>, ack?: Ack) => void;
+  'screen:signal': (payload: { to: string; signal: ScreenSignal }) => void;
 }
 
 export interface ServerToClientEvents {
@@ -196,4 +359,6 @@ export interface ServerToClientEvents {
   'chat:message': (msg: ChatMessage) => void;
   'reaction': (reaction: Reaction) => void;
   'notice': (payload: { level: 'info' | 'error'; text: string }) => void;
+  'voice:signal': (payload: { from: string; signal: VoiceSignal }) => void;
+  'screen:signal': (payload: { from: string; signal: ScreenSignal }) => void;
 }

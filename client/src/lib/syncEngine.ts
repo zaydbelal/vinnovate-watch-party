@@ -1,4 +1,4 @@
-import { SYNC, expectedPosition, type MediaItem, type PlaybackState } from '@watch-party/shared';
+import { BUFFERING, SYNC, expectedPosition, type MediaItem, type PlaybackState } from '@watch-party/shared';
 import { AutoplayBlockedError, playerFactories, type PlayerAdapter } from '../players';
 
 export interface SyncEngineHooks {
@@ -9,19 +9,26 @@ export interface SyncEngineHooks {
   onEnded(mediaId: string): void;
   onError(message: string): void;
   onLoading(loading: boolean): void;
+  /** The player stalled for longer than BUFFERING.reportAfterMs, or recovered. */
+  onBuffering(mediaId: string, buffering: boolean): void;
 }
 
 /**
  * Keeps a local player locked to the room's shared timeline.
  *
- * The server only sends state changes (play/pause/seek/load). Between them,
- * every client computes `expectedPosition(state, serverNow)` itself and
+ * The server only sends state changes (play/pause/seek/load/rate). Between
+ * them, every client computes `expectedPosition(state, serverNow)` itself and
  * corrects its player toward it:
- *   - |drift| > hardSeek              -> seek
+ *   - |drift| > hardSeek              -> seek (with a learned lead, see below)
  *   - |drift| > tolerance             -> nudge playbackRate (smooth, no jump)
  *                                        until |drift| < target (hysteresis)
  *   - otherwise                       -> play at the room rate
+ *   - paused                          -> hold the exact same frame as everyone
  * Players without fine rate control (YouTube) seek past a lower threshold.
+ *
+ * Drift is read from the frame actually on screen (Html5Player uses
+ * requestVideoFrameCallback) and median-filtered, so one noisy reading never
+ * triggers a correction.
  */
 export class SyncEngine {
   private player: PlayerAdapter | null = null;
@@ -37,6 +44,17 @@ export class SyncEngine {
   private volume = 1;
   private muted = false;
   private timer: ReturnType<typeof setInterval>;
+  private driftSamples: number[] = [];
+  /**
+   * Seeking a playing video takes time, so we land behind. We seek this far
+   * ahead instead, learning the right amount from the drift after each seek.
+   */
+  private seekLeadMs = 0;
+  private measureSeekLead = false;
+  /** Extra offset applied to the target (used by "sync to host"). */
+  private targetOffsetMs = 0;
+  private stallSince: number | null = null;
+  private reportedBuffering = false;
 
   constructor(
     private readonly container: HTMLElement,
@@ -55,6 +73,7 @@ export class SyncEngine {
   /** Feed a new authoritative state from the server. */
   async setState(state: PlaybackState): Promise<void> {
     this.state = state;
+    this.driftSamples = [];
     if (!state.media) return;
     if (state.media.id !== this.loadedMediaId) {
       await this.loadMedia(state.media);
@@ -79,6 +98,19 @@ export class SyncEngine {
     this.apply();
   }
 
+  /** Follow the timeline offset by `ms` (positive = ahead). 0 follows the room exactly. */
+  setTargetOffset(ms: number): void {
+    this.targetOffsetMs = ms;
+  }
+
+  /** Drop any smoothing and snap to the target right now. */
+  resync(): void {
+    const { player, state } = this;
+    if (!player || !state?.media || state.media.id !== this.loadedMediaId) return;
+    this.driftSamples = [];
+    this.seek(this.target(state), state.playing);
+  }
+
   setVolume(volume: number): void {
     this.volume = volume;
     this.player?.setVolume(volume);
@@ -89,9 +121,20 @@ export class SyncEngine {
     this.player?.setMuted(muted);
   }
 
+  private target(state: PlaybackState): number {
+    return expectedPosition(state, this.hooks.serverNow()) + (state.playing ? this.targetOffsetMs / 1000 : 0);
+  }
+
+  /** Half a frame when the frame rate is known: every paused screen shows the same frame. */
+  private pausedTolerance(): number {
+    const frame = this.player?.frameDurationMs?.();
+    return frame ? Math.min(SYNC.pausedToleranceMs, frame / 2) : SYNC.pausedToleranceMs;
+  }
+
   private async loadMedia(media: MediaItem): Promise<void> {
     const token = ++this.loadToken;
     this.hooks.onLoading(true);
+    this.setBuffering(false);
     try {
       if (!this.player || this.playerKind !== media.source.kind) {
         this.player?.destroy();
@@ -117,9 +160,9 @@ export class SyncEngine {
   private apply(): void {
     const { player, state } = this;
     if (!player || !state?.media || state.media.id !== this.loadedMediaId) return;
-    const target = expectedPosition(state, this.hooks.serverNow());
-    const tolerance = state.playing ? SYNC.driftToleranceMs : SYNC.pausedToleranceMs;
-    if (Math.abs(player.getTime() - target) * 1000 > tolerance) this.seek(target);
+    const target = this.target(state);
+    const tolerance = state.playing ? SYNC.driftToleranceMs : this.pausedTolerance();
+    if (Math.abs(player.getTime() - target) * 1000 > tolerance) this.seek(target, state.playing);
     player.setRate(state.rate);
     if (state.playing) this.tryPlay();
     else player.pause();
@@ -128,9 +171,13 @@ export class SyncEngine {
   private tick(): void {
     const { player, state } = this;
     if (!player || !state?.media || state.media.id !== this.loadedMediaId) return;
+    this.watchBuffering(player, state);
+
     if (!state.playing) {
       if (!player.isPaused()) player.pause();
-      if (performance.now() >= this.settleUntil && Math.abs(player.getTime() - state.position) * 1000 > SYNC.pausedToleranceMs) this.seek(state.position);
+      if (performance.now() >= this.settleUntil && Math.abs(player.getTime() - state.position) * 1000 > this.pausedTolerance()) {
+        this.seek(state.position, false);
+      }
       this.hooks.onDrift((player.getTime() - state.position) * 1000);
       return;
     }
@@ -141,16 +188,27 @@ export class SyncEngine {
     }
     if (performance.now() < this.settleUntil) return;
 
-    const expected = expectedPosition(state, this.hooks.serverNow());
+    const expected = this.target(state);
     const duration = player.getDuration();
     if (duration && expected >= duration) return; // waiting for "ended"
-    const driftMs = (player.getTime() - expected) * 1000;
+    const raw = (player.getTime() - expected) * 1000;
+
+    if (this.measureSeekLead) {
+      // Landed `raw` ms off after the last seek: adjust the lead for next time.
+      this.measureSeekLead = false;
+      this.seekLeadMs = Math.max(0, Math.min(SYNC.maxSeekLeadMs, this.seekLeadMs - raw * 0.7));
+    }
+
+    this.driftSamples.push(raw);
+    if (this.driftSamples.length > SYNC.driftSmoothingSamples) this.driftSamples.shift();
+    const driftMs = median(this.driftSamples);
     const abs = Math.abs(driftMs);
     this.hooks.onDrift(driftMs);
 
-    if (abs > SYNC.hardSeekThresholdMs || (!player.fineRate && abs > SYNC.coarseSeekThresholdMs)) {
+    // Big jumps use the raw reading so a real desync is fixed at once.
+    if (Math.abs(raw) > SYNC.hardSeekThresholdMs || (!player.fineRate && abs > SYNC.coarseSeekThresholdMs)) {
       this.correcting = false;
-      this.seek(expected);
+      this.seek(expected, true);
       return;
     }
     if (abs > SYNC.driftToleranceMs) this.correcting = true;
@@ -165,8 +223,39 @@ export class SyncEngine {
     }
   }
 
-  private seek(position: number): void {
-    this.player?.seek(position);
+  /**
+   * Auto-buffer catching, client half: report a stall once it has lasted
+   * BUFFERING.reportAfterMs (seeks get their settle time first), and report
+   * recovery as soon as the player has data again, even while paused.
+   */
+  private watchBuffering(player: PlayerAdapter, state: PlaybackState): void {
+    const now = performance.now();
+    const stalled = player.isBuffering();
+    if (this.reportedBuffering) {
+      if (!stalled) this.setBuffering(false);
+      return;
+    }
+    if (!state.playing || this.blocked || now < this.settleUntil || !stalled) {
+      this.stallSince = null;
+      return;
+    }
+    this.stallSince ??= now;
+    if (now - this.stallSince >= BUFFERING.reportAfterMs) this.setBuffering(true);
+  }
+
+  private setBuffering(buffering: boolean): void {
+    this.stallSince = null;
+    if (this.reportedBuffering === buffering) return;
+    this.reportedBuffering = buffering;
+    const id = this.loadedMediaId ?? this.state?.media?.id;
+    if (id) this.hooks.onBuffering(id, buffering);
+  }
+
+  private seek(position: number, playing: boolean): void {
+    const lead = playing ? this.seekLeadMs / 1000 : 0;
+    this.player?.seek(position + lead);
+    this.measureSeekLead = playing;
+    this.driftSamples = [];
     this.settleUntil = performance.now() + SYNC.seekSettleMs;
   }
 
@@ -183,4 +272,10 @@ export class SyncEngine {
       })
       .finally(() => (this.playPending = false));
   }
+}
+
+function median(values: number[]): number {
+  const s = [...values].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }

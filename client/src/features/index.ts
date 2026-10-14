@@ -1,5 +1,6 @@
 import type { ComponentType } from 'react';
 import { ChatPanel } from './ChatPanel';
+import { ClipsPanel } from './ClipsPanel';
 import { DiscoverPanel } from './DiscoverPanel';
 import { PeoplePanel } from './PeoplePanel';
 import { PlaylistPanel } from './PlaylistPanel';
@@ -16,9 +17,10 @@ export interface SidebarPanel {
  * folder and add a line here.
  */
 export const panels: SidebarPanel[] = [
-  { id: 'chat', label: '💬 Chat', component: ChatPanel },
-  { id: 'discover', label: '🎞 Discover', component: DiscoverPanel },
-  { id: 'playlist', label: '📃 Playlist', component: PlaylistPanel },
-  { id: 'polls', label: '📊 Polls', component: PollsPanel },
-  { id: 'people', label: '👥 People', component: PeoplePanel },
+  { id: 'chat', label: 'Chat', component: ChatPanel },
+  { id: 'discover', label: 'Discover', component: DiscoverPanel },
+  { id: 'playlist', label: 'Queue', component: PlaylistPanel },
+  { id: 'polls', label: 'Polls', component: PollsPanel },
+  { id: 'clips', label: 'Clips', component: ClipsPanel },
+  { id: 'people', label: 'People', component: PeoplePanel },
 ];

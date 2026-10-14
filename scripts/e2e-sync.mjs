@@ -49,9 +49,11 @@ console.log('Room:', url);
 await Promise.all([B.goto(url), C.goto(url)]);
 for (const p of [A, B, C]) await p.waitForSelector('.room-header');
 
-await A.click('text=📃 Playlist');
-await A.fill('input[placeholder^="Paste"]', VIDEO);
+await A.getByRole('tab', { name: 'Queue' }).click();
+await A.fill('.playlist input', VIDEO);
 await A.click('.playlist >> button:has-text("Play")');
+// New rooms open on the lobby; the video loads paused until the host starts the show.
+await A.click('text=Start now');
 for (const p of [A, B, C]) await p.waitForSelector('video');
 await sleep(4000);
 results.playing = await spread([A, B, C], 'playing (4 s)');

@@ -8,7 +8,7 @@ export function NamePrompt({ onDone }: { onDone: (name: string) => void }) {
   return (
     <main className="home">
       <form
-        className="home-card"
+        className="home-inner"
         onSubmit={(e) => {
           e.preventDefault();
           if (!name.trim()) return;
@@ -16,7 +16,7 @@ export function NamePrompt({ onDone }: { onDone: (name: string) => void }) {
           onDone(name.trim());
         }}
       >
-        <h2>You're invited 🍿</h2>
+        <h1 className="home-title">You're invited</h1>
         <label className="field">
           <span>What should we call you?</span>
           <input value={name} maxLength={LIMITS.maxNameLength} onChange={(e) => setName(e.target.value)} autoFocus />

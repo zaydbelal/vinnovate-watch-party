@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import { parseMediaUrl, youtubeThumbnail } from '@watch-party/shared';
-import { youtubeTitle } from '../lib/api';
 import { useMe, useRoom, useSession } from '../lib/context';
+import { mediaFromInput } from '../lib/media';
 
 /** Shared queue: paste links, vote, play, and turn the queue into a poll. */
 export function PlaylistPanel() {
@@ -14,14 +13,12 @@ export function PlaylistPanel() {
 
   const add = async (e: React.FormEvent, playNow = false) => {
     e.preventDefault();
-    const source = parseMediaUrl(url);
-    if (!source) return session.notify('error', 'That link does not look like a YouTube video or a video file');
     setBusy(true);
-    const title =
-      source.kind === 'youtube'
-        ? ((await youtubeTitle(source.url)) ?? `YouTube · ${source.url}`)
-        : decodeURIComponent(new URL(source.url).pathname.split('/').pop() || 'Video');
-    const media = { title, source, thumbnail: source.kind === 'youtube' ? youtubeThumbnail(source.url) : undefined };
+    const media = await mediaFromInput(url);
+    if (!media) {
+      setBusy(false);
+      return session.notify('error', 'That link does not look like a video, a YouTube link or a streaming-service title');
+    }
     const res = playNow ? await session.load(media) : await session.addToPlaylist(media);
     setBusy(false);
     if (res.ok) setUrl('');
@@ -39,9 +36,9 @@ export function PlaylistPanel() {
   return (
     <div className="playlist">
       <form className="row" onSubmit={(e) => add(e)}>
-        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a YouTube or .mp4 link" />
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="YouTube, .mp4, Netflix, Prime Video, JioHotstar or ZEE5 link" />
         <button className="btn" disabled={busy || !url}>
-          + Queue
+          Queue
         </button>
         {canControl && (
           <button type="button" className="btn primary" disabled={busy || !url} onClick={(e) => add(e, true)}>
@@ -51,7 +48,10 @@ export function PlaylistPanel() {
       </form>
 
       {playlist.length === 0 ? (
-        <p className="muted empty">Queue is empty. Add from Discover or paste a link. The most-voted video plays next.</p>
+        <p className="muted empty">
+          Queue is empty. Add from Discover or paste a link. The most-voted video plays next. Streaming-service links play in companion mode:
+          everyone uses their own account and the room keeps the clock.
+        </p>
       ) : (
         <>
           <ul className="queue">
@@ -60,22 +60,22 @@ export function PlaylistPanel() {
               return (
                 <li key={item.id}>
                   <span className="queue-pos">{i + 1}</span>
-                  {item.thumbnail ? <img src={item.thumbnail} alt="" /> : <div className="thumb-ph">🎬</div>}
+                  {item.thumbnail ? <img src={item.thumbnail} alt="" /> : <div className="thumb-ph">{item.title[0]}</div>}
                   <div className="queue-info">
                     <div className="ellipsis">{item.title}</div>
                     <div className="muted small">by {members.find((m) => m.id === item.addedBy)?.name ?? 'someone'}</div>
                   </div>
                   <button className={`btn small ${voted ? 'primary' : ''}`} onClick={() => session.vote(item.id)} title="Vote to play next">
-                    ▲ {item.votes.length}
+                    +{item.votes.length}
                   </button>
                   {canControl && (
-                    <button className="btn small" onClick={() => void session.playItem(item.id)} title="Play now">
-                      ▶
+                    <button className="btn small ghost" onClick={() => void session.playItem(item.id)}>
+                      Play
                     </button>
                   )}
                   {(isHost || item.addedBy === memberId) && (
-                    <button className="btn small ghost" onClick={() => void session.removeFromPlaylist(item.id)} title="Remove">
-                      ✕
+                    <button className="btn small ghost" onClick={() => void session.removeFromPlaylist(item.id)} aria-label="Remove">
+                      Remove
                     </button>
                   )}
                 </li>
@@ -84,7 +84,7 @@ export function PlaylistPanel() {
           </ul>
           {playlist.length >= 2 && (
             <button className="btn" onClick={pollFromQueue}>
-              📊 Let the room vote on the next video
+              Let the room vote on the next video
             </button>
           )}
         </>

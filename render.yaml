@@ -1,0 +1,24 @@
+# Render blueprint: New > Blueprint > pick this repo. One web service serves
+# the API, the WebSocket and the built client on a single HTTPS URL.
+services:
+  - type: web
+    name: watch-party
+    runtime: node
+    region: singapore # close to most viewers; Render can't move a service, so changing this means a new service
+    plan: free # free sleeps when idle (first visit wakes it, ~1 min); use starter for events
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        value: "1"
+      # TURN relay for voice/screen share across the internet (see docs/DEPLOY.md).
+      - key: TURN_URL
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false

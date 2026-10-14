@@ -64,7 +64,8 @@ async function main() {
   const send = (socket: Client, cmd: Parameters<ClientToServerEvents['playback:command']>[0]) =>
     new Promise<{ ok: boolean; error?: string }>((r) => socket.emit('playback:command', cmd, r));
 
-  // Load a video so play/pause/seek are valid.
+  // Skip the pre-show lobby (new rooms open on it), then load a video so play/pause/seek are valid.
+  await new Promise((r) => host.emit('lobby:set', { active: false }, r));
   const loaded = await send(host, {
     action: 'load',
     media: { title: 'Bench', source: { kind: 'html5', url: 'https://example.com/bench.mp4' }, durationSec: 3600 },

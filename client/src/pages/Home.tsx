@@ -3,12 +3,15 @@ import { LIMITS } from '@watch-party/shared';
 import { navigate } from '../App';
 import { createRoom, roomExists } from '../lib/api';
 import { getSavedName, saveName } from '../lib/identity';
+import { useTheme } from '../lib/theme';
+import { Switch } from '../components/ui';
 
 export function Home() {
   const [name, setName] = useState(getSavedName);
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [theme, toggleTheme] = useTheme();
 
   const requireName = () => {
     if (!name.trim()) {
@@ -46,11 +49,14 @@ export function Home() {
 
   return (
     <main className="home">
-      <div className="home-card">
-        <h1>
-          <span className="logo">🍿</span> Watch Party
-        </h1>
-        <p className="muted">Watch together in perfect sync. Chat, react, vote on what's next.</p>
+      <div className="home-theme">
+        <Switch checked={theme === 'dark'} onChange={toggleTheme} label="Dark" />
+      </div>
+      <div className="home-inner">
+        <h1 className="home-title">Watch Party</h1>
+        <p className="home-lede">
+          The same frame, on every screen. Chat, talk, vote on what's next, and clip the moment everyone screamed.
+        </p>
 
         <label className="field">
           <span>Your name</span>
@@ -61,13 +67,16 @@ export function Home() {
           Create a room
         </button>
 
-        <div className="divider">or join one</div>
-
-        <form className="row" onSubmit={onJoin}>
-          <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Room code or invite link" />
-          <button className="btn" disabled={busy}>
-            Join
-          </button>
+        <form className="join" onSubmit={onJoin}>
+          <label className="field">
+            <span>Have a code?</span>
+            <div className="row">
+              <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Room code or invite link" />
+              <button className="btn" disabled={busy}>
+                Join
+              </button>
+            </div>
+          </label>
         </form>
 
         {error && <p className="error">{error}</p>}

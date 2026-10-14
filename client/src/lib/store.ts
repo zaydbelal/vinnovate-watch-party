@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { Reaction, RoomSnapshot } from '@watch-party/shared';
+import type { ScreenState } from './screenShare';
+import type { VoiceState } from './voice';
 
 export type ConnectionStatus = 'connecting' | 'joined' | 'reconnecting' | 'error';
 
@@ -20,6 +22,12 @@ export interface ClientState {
   sync: SyncStats;
   /** Transient toast messages. */
   notices: { id: number; level: 'info' | 'error'; text: string }[];
+  voice: VoiceState;
+  /** Why you're AFK: pressed "Step away", or your tab has been hidden. */
+  away: { manual: boolean; auto: boolean };
+  /** Follow the host's actual player instead of the room timeline. */
+  lockToHost: boolean;
+  screen: ScreenState;
 }
 
 type Listener = () => void;
@@ -49,6 +57,10 @@ export function initialState(): ClientState {
     reactions: [],
     sync: { offsetMs: 0, rttMs: 0, driftMs: 0, lastControlLatencyMs: null },
     notices: [],
+    voice: { joined: false, muted: false, speaking: [] },
+    away: { manual: false, auto: false },
+    lockToHost: false,
+    screen: { stream: null, sharing: false },
   };
 }
 

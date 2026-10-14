@@ -9,6 +9,7 @@ import { SessionContext } from '../lib/context';
 import { getSavedName } from '../lib/identity';
 import { RoomSession } from '../lib/session';
 import { useStore } from '../lib/store';
+import { useTheme } from '../lib/theme';
 
 export function RoomPage({ code }: { code: string }) {
   const [name, setName] = useState(getSavedName);
@@ -35,11 +36,16 @@ function RoomView({ session }: { session: RoomSession }) {
   const status = useStore(session.store, (s) => s.status);
   const error = useStore(session.store, (s) => s.error);
   const hasRoom = useStore(session.store, (s) => !!s.room);
+  const away = useStore(session.store, (s) => s.away.manual);
+  const [theme, toggleTheme] = useTheme();
+  // Focus mode: only the video and chat, on black.
+  const [focus, setFocus] = useState(false);
+  const toggleFocus = () => setFocus((f) => !f);
 
   if (status === 'error' && !hasRoom) {
     return (
       <main className="home">
-        <div className="home-card">
+        <div className="home-inner">
           <h2>Can't join this room</h2>
           <p className="muted">{error}</p>
           <button className="btn primary" onClick={() => navigate('/')}>
@@ -49,15 +55,28 @@ function RoomView({ session }: { session: RoomSession }) {
       </main>
     );
   }
-  if (!hasRoom) return <div className="center muted">Joining room…</div>;
+  if (!hasRoom) return <div className="center muted">Joining room</div>;
 
   return (
-    <div className="room">
-      <RoomHeader />
+    <div className={`room ${focus ? 'focus' : ''}`}>
+      {!focus && <RoomHeader theme={theme} onToggleTheme={toggleTheme} onToggleFocus={toggleFocus} />}
+      {away && !focus && (
+        <div className="away-bar">
+          You're marked away. The host can see it.
+          <button className="btn small" onClick={() => session.setStepAway(false)}>
+            I'm back
+          </button>
+        </div>
+      )}
       <div className="room-body">
-        <Player />
-        <Sidebar />
+        <Player focus={focus} onToggleFocus={toggleFocus} />
+        <Sidebar focus={focus} />
       </div>
+      {focus && (
+        <button className="focus-exit" onClick={toggleFocus} title="Leave focus mode (F or Esc)">
+          Exit focus
+        </button>
+      )}
       <Toasts />
     </div>
   );
