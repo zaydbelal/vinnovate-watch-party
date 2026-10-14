@@ -4,6 +4,8 @@ A real-time watch-party app: create a room, share the link, and everyone watches
 
 Built for the VinnovateIT Round 1 web-development task ("Watch Party").
 
+**Live demo: [watch-party-rb37.onrender.com](https://watch-party-rb37.onrender.com)**. Create a room and share the invite link. It runs on a free plan, so the first visit after a quiet spell can take about a minute while the server wakes up.
+
 | Requirement | Where it lives |
 | --- | --- |
 | Create/join rooms by invite link or code | `POST /api/rooms`, `server/src/features/room.ts`, `client/src/pages/Home.tsx` |
