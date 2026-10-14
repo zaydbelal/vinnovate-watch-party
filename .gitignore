@@ -4,3 +4,6 @@ dist/
 .env
 .DS_Store
 bench-results.json
+
+# Impeccable engine binary: platform-specific, re-downloaded by its launcher on demand
+.claude/skills/impeccable/scripts/bin/

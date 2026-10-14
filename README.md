@@ -52,7 +52,7 @@ npm start            # http://localhost:3001
 - Emoji reactions that float over the video, a voted playlist, polls, host transfer, and Discover with categories, filters, fuzzy search and recommendations.
 
 **Look and feel**
-- Light and dark themes (remembers your choice, defaults to the OS setting), responsive down to phone width, Satoshi type, separation by space and tone rather than borders, no glow or gradients. `npm run design:check` runs [Impeccable](https://impeccable.style)'s anti-pattern detector, and CI runs it too.
+- Light and dark themes (remembers your choice, defaults to the OS setting), responsive down to phone width, Satoshi type, separation by space and tone rather than borders, no glow or gradients. `npm run design:check` runs [Impeccable](https://impeccable.style)'s anti-pattern detector, and CI runs it too. Impeccable is also installed as a Claude Code skill with hooks that check UI edits in real time.
 
 **Reliability**: reconnects keep your seat, identity, voice and AFK state for 30 s. Late joiners land at the live position, autoplay blocks get a "click to join playback" button, and simultaneous commands are serialised and versioned so everyone converges on the same state.
 
