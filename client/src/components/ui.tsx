@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Member } from '@watch-party/shared';
 import { useSession } from '../lib/context';
-import { THEMES, type Theme } from '../lib/theme';
+import { THEMES, THEME_LABELS, type Theme } from '../lib/theme';
 
 /** Accessible on/off switch with a visible text label. */
 export function Switch({ checked, onChange, label, title }: { checked: boolean; onChange: (v: boolean) => void; label: string; title?: string }) {
@@ -15,13 +15,13 @@ export function Switch({ checked, onChange, label, title }: { checked: boolean; 
   );
 }
 
-/** Theme picker: light, dark, or the brutalist backup. */
+/** Theme picker: light, dark, or the brutalist backup in light or dark. */
 export function ThemePicker({ theme, onChange }: { theme: Theme; onChange: (t: Theme) => void }) {
   return (
     <select className="theme-picker" value={theme} onChange={(e) => onChange(e.target.value as Theme)} aria-label="Theme">
       {THEMES.map((t) => (
         <option key={t} value={t}>
-          {t[0].toUpperCase() + t.slice(1)}
+          {THEME_LABELS[t]}
         </option>
       ))}
     </select>

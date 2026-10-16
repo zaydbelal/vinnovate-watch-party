@@ -13,7 +13,7 @@
       // Apply the saved theme before first paint (see src/lib/theme.ts).
       try {
         var t = localStorage.getItem('wp:theme');
-        document.documentElement.dataset.theme = t === 'light' || t === 'dark' || t === 'brutal' ? t : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        document.documentElement.dataset.theme = ['light', 'dark', 'brutal', 'brutal-dark'].indexOf(t) >= 0 ? t : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
       } catch (e) {}
     </script>
   </head>

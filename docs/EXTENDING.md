@@ -14,7 +14,7 @@ Almost every knob lives in one of three places. Change the value, save, done.
 | What | Where | Key |
 | --- | --- | --- |
 | Colours, fonts, type sizes, spacing, radius, sidebar width | `client/src/styles.css` (top of file) | `--accent`, `--font`, `--fs-*`, `--space-*`, `--radius`, `--sidebar-width`; dark mode overrides in `:root[data-theme='dark']` |
-| Brutal theme | `client/src/styles.css` (last block, `[data-theme='brutal']`) | Its own tokens (`--rule`, `--display`, colours) plus overrides; delete the block and `'brutal'` in `client/src/lib/theme.ts` to remove it. Add a theme the same way: a `THEMES` entry and a `[data-theme='…']` block |
+| Brutal themes | `client/src/styles.css` (last block, `[data-theme^='brutal']`) | Shared tokens (`--ink`, `--paper`, `--hl`, `--rule`, `--display`) plus overrides; `:root[data-theme='brutal-dark']` only swaps ink and paper. Delete the block and the two `brutal` entries in `client/src/lib/theme.ts` (and `client/index.html`) to remove them. Add a theme the same way: a `THEMES` + `THEME_LABELS` entry and a `[data-theme='…']` block |
 | Font files | `client/public/fonts` + `@font-face` at the top of `client/src/styles.css` | Satoshi woff2 files are self-hosted. To change face, replace the files and `@font-face` rules, update `--font`, and update the preloads in `client/index.html` |
 | Sync tightness | `shared/src/config.ts` | `SYNC.*` (drift tolerance/target, paused frame tolerance, check interval, smoothing) |
 | Speed menu | `shared/src/config.ts` | `PLAYBACK_RATES` |
